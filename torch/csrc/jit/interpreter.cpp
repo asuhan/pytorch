@@ -19,6 +19,11 @@
 #include <mutex>
 #include <ostream>
 #include <stdexcept>
+
+#ifdef WITH_XLA
+#include "torch/csrc/jit/xla_code_impl.h"
+#endif  // WITH_XLA
+
 #include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
@@ -883,6 +888,9 @@ struct CodeImpl {
 struct InterpreterStateImpl {
   InterpreterStateImpl(const Code & function_)
   : function(function_.pImpl),
+#ifdef WITH_XLA
+    xla_function(function_.pXlaImpl),
+#endif  // WITH_XLA
     int_data(function->int_data.data()),
     bool_data(function->bool_data),
     registers(function->register_size) {
@@ -891,6 +899,16 @@ struct InterpreterStateImpl {
     // std::cout << "running stage: " << current_stage << " of " << function->stage_end.size() << "\n";
     // std::cout << *function->graph << "\n";
     // function->dump(std::cout);
+#ifdef WITH_XLA
+    if (xla_function) {
+      auto xla_status = xla_function->runComputation(stack, current_stage);
+      if (xla_status) {
+        ++current_stage;
+        ++current_pc;
+        return;
+      }
+    }
+#endif  // WITH_XLA
     size_t pc = current_pc;
     size_t last = function->stage_end[current_stage];
     auto & instructions = function->instructions;
@@ -942,6 +960,9 @@ struct InterpreterStateImpl {
   size_t current_stage = 0;
   size_t current_pc = 0;
   std::shared_ptr<CodeImpl> function; // keep function alive
+#ifdef WITH_XLA
+  std::shared_ptr<XlaCodeImpl> xla_function;
+#endif  // WITH_XLA
   // these are just copies of function to prevent indirections in interpreter
   int * int_data;
   const std::vector<bool> & bool_data;
@@ -970,7 +991,12 @@ std::ostream & operator<<(std::ostream & out, const Code & code) {
 }
 
 Code::Code(std::shared_ptr<Graph>& graph)
-    : pImpl(new CodeImpl(graph)) {}
+    : pImpl(new CodeImpl(graph)) {
+#ifdef WITH_XLA
+  PreprocessGraph preprocess_graph(*graph);
+  pXlaImpl.reset(new XlaCodeImpl(preprocess_graph.graph));
+#endif  // WITH_XLA
+}
 Code::~Code() {}
 
 const std::vector<GraphExecutor*>& Code::executors() {
