@@ -18,6 +18,7 @@ USE_MKLDNN=0
 USE_GLOO_IBVERBS=0
 USE_DISTRIBUTED_MW=0
 FULL_CAFFE2=0
+WITH_XLA=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
       --use-cuda)
@@ -40,6 +41,9 @@ while [[ $# -gt 0 ]]; do
           ;;
       --full-caffe2)
           FULL_CAFFE2=1
+          ;;
+      --with-xla)
+          WITH_XLA=1
           ;;
       *)
           break
@@ -303,6 +307,14 @@ for arg in "$@"; do
     fi
 done
 
+if [[ $WITH_XLA -eq 1 ]]; then
+  pushd $THIRD_PARTY_DIR/tensorflow
+  patch -p1 < $BASE_DIR/tensorflow.patch
+  bazel build -c opt //tensorflow/compiler/xla/rpc:libxla_computation_client.so
+  bazel build -c opt //tensorflow/compiler/xla/rpc:grpc_service_main_cpu
+  popd
+fi
+
 pushd torch/lib
 
 # If all the builds succeed we copy the libraries, headers,
@@ -318,6 +330,11 @@ cp ../../aten/src/THCUNN/generic/THCUNN.h .
 cp -r "$INSTALL_DIR/include" .
 if [ -d "$INSTALL_DIR/bin/" ]; then
     cp -r "$INSTALL_DIR/bin/"/* .
+fi
+
+if [[ $WITH_XLA -eq 1 ]]; then
+  cp $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/compiler/xla/rpc/libxla_computation_client.so .
+  cp $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/libtensorflow_framework.so .
 fi
 
 popd
