@@ -24,6 +24,10 @@ struct TensorType;
 struct IValue;
 using Stack = std::vector<IValue>;
 
+#ifdef WITH_XLA
+struct XlaCodeImpl;
+#endif  // WITH_XLA
+
 struct TORCH_API Code {
   Code()
     : pImpl(nullptr) {}
@@ -34,11 +38,18 @@ struct TORCH_API Code {
   const std::vector<GraphExecutor*>& executors();
 
   explicit operator bool() const {
+#ifdef WITH_XLA
+    return pImpl != nullptr || pXlaImpl != nullptr;
+#else
     return pImpl != nullptr;
+#endif  // WITH_XLA
   }
 
 private:
   std::shared_ptr<CodeImpl> pImpl;
+#ifdef WITH_XLA
+  std::shared_ptr<XlaCodeImpl> pXlaImpl;
+#endif  // WITH_XLA
   friend struct InterpreterStateImpl;
   friend std::ostream & operator<<(std::ostream & out, const Code & code);
 };

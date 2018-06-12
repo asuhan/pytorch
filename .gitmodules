@@ -79,3 +79,6 @@
 [submodule "third_party/ideep"]
 	path = third_party/ideep
 	url = https://github.com/intel/ideep
+[submodule "third_party/tensorflow"]
+	path = third_party/tensorflow
+	url = git@github.com:tensorflow/tensorflow.git
