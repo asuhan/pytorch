@@ -354,6 +354,8 @@ done
 
 if [[ $WITH_XLA -eq 1 ]]; then
   pushd $THIRD_PARTY_DIR/tensorflow
+  git reset --hard
+  git clean -f
   patch -p1 < $BASE_DIR/tensorflow.patch
   bazel build -c opt //tensorflow/compiler/xla/rpc:libxla_computation_client.so
   bazel build -c opt //tensorflow/compiler/xla/rpc:grpc_service_main_cpu
@@ -378,7 +380,9 @@ if [ -d "$INSTALL_DIR/bin/" ]; then
 fi
 
 if [[ $WITH_XLA -eq 1 ]]; then
+  chmod 0644 $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/compiler/xla/rpc/libxla_computation_client.so
   cp $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/compiler/xla/rpc/libxla_computation_client.so .
+  chmod 0644 $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/libtensorflow_framework.so
   cp $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/libtensorflow_framework.so .
 fi
 
