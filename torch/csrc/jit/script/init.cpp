@@ -6,6 +6,9 @@
 #include "torch/csrc/jit/script/compiler.h"
 #include "torch/csrc/jit/tensor_conversions.h"
 #include "torch/csrc/jit/python_tracer.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/xla_module.h"
+#endif  // WITH_XLA
 
 #include <torch/csrc/api/include/torch/detail/ordered_dict.h>
 
@@ -354,6 +357,18 @@ static void gatherParametersAndBuffers(std::vector<at::Tensor*> & values, const 
   }
 }
 
+#ifdef WITH_XLA
+std::vector<at::Tensor> createTensorList(py::tuple tuple, size_t reserve_extra_space = 0) {
+  std::vector<at::Tensor> result;
+  result.reserve(tuple.size() + reserve_extra_space);
+  for(auto e : tuple) {
+    auto variable = py::cast<autograd::Variable>(e);
+    result.push_back(variable.data());
+  }
+  return result;
+}
+#endif  // WITH_XLA
+
 void initJitScriptBindings(PyObject* module) {
   auto m = py::handle(module).cast<py::module>();
   // torch.jit.ScriptModule is a subclass of this C++ object.
@@ -469,6 +484,13 @@ void initJitScriptBindings(PyObject* module) {
     .def("propagate_shapes", &Method::propagate_shapes)
     .def("propagate_and_assign_input_and_output_shapes", &Method::propagate_and_assign_input_and_output_shapes)
     .def("params", &Method::params);
+
+#ifdef WITH_XLA
+  py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule")
+    .def("__call__", [](XlaModule& xla_module, py::args args) {
+      return autograd::make_variable(xla_module.run(createTensorList(args)), false);
+    });
+#endif  // WITH_XLA
 
   m.def("_jit_script_compile", [](Def def, ResolutionCallback rcb) {
     return compileFunction(def, pythonResolver(rcb));

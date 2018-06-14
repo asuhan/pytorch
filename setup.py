@@ -838,7 +838,9 @@ main_sources = [
 ]
 
 if WITH_XLA:
+    main_sources.append('torch/csrc/jit/passes/xla.cpp')
     main_sources.append('torch/csrc/jit/xla_code_impl.cpp')
+    main_sources.append('torch/csrc/jit/xla_module.cpp')
 
 try:
     import numpy as np

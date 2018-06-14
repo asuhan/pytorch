@@ -22,6 +22,11 @@
 #include "torch/csrc/jit/script/init.h"
 #include "torch/csrc/jit/script/python_tree_views.h"
 #include "torch/csrc/jit/python_interpreter.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/script/module.h"
+#include "torch/csrc/jit/xla_module.h"
+#include "torch/csrc/jit/passes/xla.h"
+#endif  // WITH_XLA
 
 
 namespace torch  { namespace jit {
@@ -104,6 +109,11 @@ void initJITBindings(PyObject *module) {
        auto g_clone = g.copy();
        return differentiate(g_clone, requires_grad);
    });
+#ifdef WITH_XLA
+   m.def("_to_xla_module", [](script::Module& module) {
+     return ToXLA(module);
+   });
+#endif  // WITH_XLA
 
   py::class_<ArgumentSpec>(m, "ArgumentSpec")
       .def("__repr__", [](ArgumentSpec& self) {
