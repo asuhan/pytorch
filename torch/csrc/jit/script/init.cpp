@@ -11,6 +11,9 @@
 #include "torch/csrc/jit/constants.h"
 #include "torch/csrc/jit/passes/to_batch.h"
 #include "torch/csrc/jit/function_schema.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/xla_module.h"
+#endif  // WITH_XLA
 
 #include <torch/csrc/api/include/torch/detail/ordered_dict.h>
 
@@ -396,6 +399,17 @@ Resolver pythonResolver(ResolutionCallback rcb) {
     return toSugaredValue(obj, m, loc);
   };
 }
+#ifdef WITH_XLA
+std::vector<at::Tensor> createTensorList(py::tuple tuple, size_t reserve_extra_space = 0) {
+  std::vector<at::Tensor> result;
+  result.reserve(tuple.size() + reserve_extra_space);
+  for(auto e : tuple) {
+    auto variable = py::cast<autograd::Variable>(e);
+    result.push_back(variable.data());
+  }
+  return result;
+}
+#endif  // WITH_XLA
 
 void initJitScriptBindings(PyObject* module) {
   auto m = py::handle(module).cast<py::module>();
@@ -576,6 +590,12 @@ void initJitScriptBindings(PyObject* module) {
   m.def("_jit_script_compile", [](const TypedDef &typed_def, ResolutionCallback rcb) {
     return compileFunction(typed_def, pythonResolver(rcb));
   });
+#ifdef WITH_XLA
+  py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule")
+    .def("__call__", [](XlaModule& xla_module, py::args args) {
+      return autograd::make_variable(xla_module.run(createTensorList(args)), false);
+    });
+#endif  // WITH_XLA
 
 }
 

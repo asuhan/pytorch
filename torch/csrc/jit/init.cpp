@@ -30,6 +30,11 @@
 #include "torch/csrc/jit/function_schema.h"
 #include "torch/csrc/jit/serialization.h"
 #include "torch/csrc/jit/operator.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/script/module.h"
+#include "torch/csrc/jit/xla_module.h"
+#include "torch/csrc/jit/passes/xla.h"
+#endif  // WITH_XLA
 
 #include <pybind11/functional.h>
 
@@ -107,6 +112,11 @@ void initJITBindings(PyObject *module) {
        auto g_clone = g.copy();
        return differentiate(g_clone, requires_grad);
    });
+#ifdef WITH_XLA
+   m.def("_to_xla_module", [](script::Module& module) {
+     return ToXLA(module);
+   });
+#endif  // WITH_XLA
 
   py::class_<ArgumentSpec>(m, "ArgumentSpec")
       .def("__repr__", [](ArgumentSpec& self) {
