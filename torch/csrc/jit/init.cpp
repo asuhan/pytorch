@@ -21,6 +21,11 @@
 #include "torch/csrc/jit/script/init.h"
 #include "torch/csrc/jit/script/python_tree_views.h"
 #include "torch/csrc/jit/python_interpreter.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/script/module.h"
+#include "torch/csrc/jit/xla_module.h"
+#include "torch/csrc/jit/passes/xla.h"
+#endif  // WITH_XLA
 
 
 namespace torch  { namespace jit {
@@ -95,6 +100,11 @@ void initJITBindings(PyObject *module) {
    .def("_jit_pass_onnx_block", BlockToONNX)
    .def("_jit_pass_fixup_onnx_loops", FixupONNXLoops)
    .def("_jit_pass_decompose_addmm", DecomposeAddmm);
+#ifdef WITH_XLA
+   m.def("_to_xla_module", [](script::Module& module) {
+     return ToXLA(module);
+   });
+#endif  // WITH_XLA
 
   py::class_<ArgumentSpec>(m, "ArgumentSpec")
       .def("__repr__", [](ArgumentSpec& self) {
