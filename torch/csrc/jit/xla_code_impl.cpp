@@ -1,10 +1,11 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/xla_code_impl.h"
 #include "tensorflow/compiler/xla/rpc/computation_client.h"
-
-using int64 = long long;
+#include "torch/csrc/jit/passes/dead_code_elimination.h"
 
 namespace {
+
+using int64 = long long;
 
 xla::Shape make_xla_shape(const at::IntList& tensor_dimensions,
                           const xla::PrimitiveType type) {
@@ -33,7 +34,9 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
 namespace torch {
 namespace jit {
 
-XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {}
+XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
+  EliminateDeadCode(graph_);
+}
 
 at::optional<at::Tensor> XlaCodeImpl::run(
     const std::vector<at::Tensor>& inputs) const {
