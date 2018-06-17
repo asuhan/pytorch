@@ -33,6 +33,32 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
   }
 }
 
+std::unique_ptr<xla::GlobalData> tensor_to_xla(
+    const at::Tensor& param_tensor,
+    const xla::Shape& param_shape) {
+  std::vector<int64> dimension_sizes;
+  size_t total_elements = 1;
+  for (const auto dimension_size : param_tensor.sizes()) {
+    dimension_sizes.push_back(dimension_size);
+    total_elements *= dimension_size;
+  }
+  if (total_elements == 1) {
+    const auto scalar_literal =
+        xla::Literal::CreateR0<float>(*param_tensor.data<float>());
+    return TransferParameterToServer(*scalar_literal);
+  }
+  xla::Array<float> parameter_xla_array(dimension_sizes);
+  std::vector<float> values_container(total_elements);
+  std::copy(
+      param_tensor.data<float>(),
+      param_tensor.data<float>() + total_elements,
+      values_container.begin());
+  parameter_xla_array.SetValues(values_container);
+  xla::Literal literal(param_shape);
+  literal.PopulateFromArray(parameter_xla_array);
+  return TransferParameterToServer(literal);
+}
+
 } // namespace
 
 namespace torch {
@@ -59,29 +85,8 @@ at::optional<at::Tensor> XlaCodeImpl::run(
        ++parameter_index) {
     CHECK_LT(parameter_index, inputs.size());
     const at::Tensor& param_tensor = inputs[parameter_index];
-    std::vector<int64> dimension_sizes;
-    size_t total_elements = 1;
-    for (const auto dimension_size : param_tensor.sizes()) {
-      dimension_sizes.push_back(dimension_size);
-      total_elements *= dimension_size;
-    }
-    if (total_elements == 1) {
-      const auto scalar_literal =
-          xla::Literal::CreateR0<float>(*param_tensor.data<float>());
-      auto data = TransferParameterToServer(*scalar_literal);
-      arguments.push_back(data.release());
-      continue;
-    }
-    xla::Array<float> parameter_xla_array(dimension_sizes);
-    std::vector<float> values_container(total_elements);
-    std::copy(
-        param_tensor.data<float>(),
-        param_tensor.data<float>() + total_elements,
-        values_container.begin());
-    parameter_xla_array.SetValues(values_container);
-    xla::Literal literal((*parameter_shapes)[parameter_index]);
-    literal.PopulateFromArray(parameter_xla_array);
-    auto data = TransferParameterToServer(literal);
+    auto data =
+        tensor_to_xla(param_tensor, (*parameter_shapes)[parameter_index]);
     arguments.push_back(data.release());
   }
   auto result_literal = xla::ExecuteComputation(computation, arguments);
