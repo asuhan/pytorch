@@ -2,6 +2,7 @@
 #include "torch/csrc/jit/xla_code_impl.h"
 #include "tensorflow/compiler/xla/rpc/computation_client.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
+#include "torch/csrc/jit/passes/remove_expands.h"
 
 namespace {
 
@@ -65,6 +66,7 @@ namespace torch {
 namespace jit {
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
+  RemoveExpands(graph_);
   EliminateDeadCode(graph_);
 }
 
@@ -152,6 +154,24 @@ xla::XlaOp build_convolution(
   return b->Add(b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias);
 }
 
+xla::XlaOp build_addmm(
+    const Node* node,
+    const xla::XlaOp& bias,
+    const xla::XlaOp& weights,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
+  const auto& node_inputs = node->inputs();
+  xla::XlaOp dot = b->Dot(weights, input);
+  const auto bias_type = node_inputs[0]->type()->cast<TensorType>();
+  CHECK(bias_type);
+  const std::vector<int64_t>& bias_size = bias_type->sizes();
+  CHECK_EQ(bias_size.size(), 1);
+  std::vector<int64> reshaped_bias_sizes;
+  reshaped_bias_sizes.push_back(1);
+  reshaped_bias_sizes.push_back(bias_size.front());
+  return b->Add(dot, b->Reshape(bias, reshaped_bias_sizes));
+}
+
 const xla::XlaOp& xla_op_for_input(
     const Node* node,
     const size_t input_index,
@@ -212,6 +232,26 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         }
         xla::XlaOp xla_output =
             build_convolution(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::t: {
+        CHECK_EQ(node->inputs().size(), 1);
+        xla::XlaOp xla_output = b.Transpose(XLA_OP(0), {1, 0});
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::addmm: {
+        if (node->inputs().size() != 3) {
+          LOG(INFO) << "Unsupported linear layer";
+          return at::nullopt;
+        }
+        xla::XlaOp xla_output =
+            build_addmm(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
