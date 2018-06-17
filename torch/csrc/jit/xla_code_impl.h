@@ -26,13 +26,10 @@ class XlaCodeImpl {
   at::optional<xla::XlaComputation> buildXlaComputation(
       const std::vector<xla::Shape>& parameter_shapes) const;
 
-  xla::XlaOp buildBinaryXlaOp(const NodeKind kind, const xla::XlaOp& lhs,
-                              const xla::XlaOp& rhs, xla::XlaBuilder* b) const;
-
   std::shared_ptr<Graph> graph_;
 };
 
-}  // namespace jit
-}  // namespace torch
+} // namespace jit
+} // namespace torch
 
-#endif  // WITH_XLA
+#endif // WITH_XLA
