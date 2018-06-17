@@ -10,6 +10,9 @@ using int64 = long long;
 xla::Shape make_xla_shape(
     const at::IntList& tensor_dimensions,
     const xla::PrimitiveType type) {
+  if (tensor_dimensions.size() == 1 && tensor_dimensions.front() == 1) {
+    return xla::ShapeUtil::MakeShapeWithLayout(type, {}, {});
+  }
   std::vector<int64> dimensions(tensor_dimensions.size());
   std::copy(
       tensor_dimensions.begin(), tensor_dimensions.end(), dimensions.begin());
@@ -61,6 +64,13 @@ at::optional<at::Tensor> XlaCodeImpl::run(
     for (const auto dimension_size : param_tensor.sizes()) {
       dimension_sizes.push_back(dimension_size);
       total_elements *= dimension_size;
+    }
+    if (total_elements == 1) {
+      const auto scalar_literal =
+          xla::Literal::CreateR0<float>(*param_tensor.data<float>());
+      auto data = TransferParameterToServer(*scalar_literal);
+      arguments.push_back(data.release());
+      continue;
     }
     xla::Array<float> parameter_xla_array(dimension_sizes);
     std::vector<float> values_container(total_elements);
@@ -126,6 +136,7 @@ xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
+    const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
   const auto stride_sym = Symbol::attr("stride");
   CHECK(node->hasAttribute(stride_sym));
@@ -133,7 +144,7 @@ xla::XlaOp build_convolution(
   std::vector<int64> window_strides(stride_attribute.size());
   std::copy(
       stride_attribute.begin(), stride_attribute.end(), window_strides.begin());
-  return b->Conv(lhs, rhs, window_strides, xla::Padding::kValid);
+  return b->Add(b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias);
 }
 
 const xla::XlaOp& xla_op_for_input(
@@ -195,7 +206,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
         xla::XlaOp xla_output =
-            build_convolution(node, XLA_OP(0), XLA_OP(1), &b);
+            build_convolution(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
