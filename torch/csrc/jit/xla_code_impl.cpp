@@ -7,11 +7,12 @@ namespace {
 
 using int64 = long long;
 
-xla::Shape make_xla_shape(const at::IntList& tensor_dimensions,
-                          const xla::PrimitiveType type) {
+xla::Shape make_xla_shape(
+    const at::IntList& tensor_dimensions,
+    const xla::PrimitiveType type) {
   std::vector<int64> dimensions(tensor_dimensions.size());
-  std::copy(tensor_dimensions.begin(), tensor_dimensions.end(),
-            dimensions.begin());
+  std::copy(
+      tensor_dimensions.begin(), tensor_dimensions.end(), dimensions.begin());
   std::vector<int64> layout(dimensions.size());
   // XLA uses minor-to-major.
   std::iota(layout.rbegin(), layout.rend(), 0);
@@ -29,7 +30,7 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
   }
 }
 
-}  // namespace
+} // namespace
 
 namespace torch {
 namespace jit {
@@ -63,9 +64,10 @@ at::optional<at::Tensor> XlaCodeImpl::run(
     }
     xla::Array<float> parameter_xla_array(dimension_sizes);
     std::vector<float> values_container(total_elements);
-    std::copy(param_tensor.data<float>(),
-              param_tensor.data<float>() + total_elements,
-              values_container.begin());
+    std::copy(
+        param_tensor.data<float>(),
+        param_tensor.data<float>() + total_elements,
+        values_container.begin());
     parameter_xla_array.SetValues(values_container);
     xla::Literal literal((*parameter_shapes)[parameter_index]);
     literal.PopulateFromArray(parameter_xla_array);
@@ -81,8 +83,8 @@ at::optional<at::Tensor> XlaCodeImpl::run(
   }
   at::Tensor result_tensor = inputs.front();
   result_tensor.resize_(dimensions);
-  std::copy(result_slice.begin(), result_slice.end(),
-            result_tensor.data<float>());
+  std::copy(
+      result_slice.begin(), result_slice.end(), result_tensor.data<float>());
   return result_tensor;
 }
 
@@ -103,20 +105,57 @@ at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
 
 namespace {
 
-xla::XlaOp build_convolution(const Node* node,
-                             const xla::XlaOp& lhs,
-                             const xla::XlaOp& rhs,
-                             xla::XlaBuilder* b) {
+xla::XlaOp build_binary_op(
+    const Node* node,
+    const xla::XlaOp& lhs,
+    const xla::XlaOp& rhs,
+    xla::XlaBuilder* b) {
+  switch (node->kind()) {
+    case aten::add: {
+      return b->Add(lhs, rhs);
+    }
+    case aten::mul: {
+      return b->Mul(lhs, rhs);
+    }
+    default:
+      LOG(FATAL) << "Invalid binary operator kind: " << node->kind();
+  }
+}
+
+xla::XlaOp build_convolution(
+    const Node* node,
+    const xla::XlaOp& lhs,
+    const xla::XlaOp& rhs,
+    xla::XlaBuilder* b) {
   const auto stride_sym = Symbol::attr("stride");
   CHECK(node->hasAttribute(stride_sym));
   std::vector<int64_t> stride_attribute = node->is(stride_sym);
   std::vector<int64> window_strides(stride_attribute.size());
-  std::copy(stride_attribute.begin(), stride_attribute.end(),
-            window_strides.begin());
+  std::copy(
+      stride_attribute.begin(), stride_attribute.end(), window_strides.begin());
   return b->Conv(lhs, rhs, window_strides, xla::Padding::kValid);
 }
 
-}  // namespace
+const xla::XlaOp& xla_op_for_input(
+    const Node* node,
+    const size_t input_index,
+    const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops) {
+  const auto& node_inputs = node->inputs();
+  const auto input = node_inputs.at(input_index);
+  const auto xla_op_it = node_xla_ops.find(input->unique());
+  CHECK(xla_op_it != node_xla_ops.end());
+  return xla_op_it->second;
+}
+
+size_t output_id(const Node* node) {
+  const auto& node_outputs = node->outputs();
+  CHECK_EQ(node_outputs.size(), 1);
+  return node_outputs[0]->unique();
+}
+
+} // namespace
+
+#define XLA_OP(input_index) xla_op_for_input(node, input_index, node_xla_ops)
 
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
@@ -129,8 +168,10 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     Value* graph_input = graph_inputs[parameter_number];
     const auto it_ok = node_xla_ops.emplace(
         graph_input->unique(),
-        b.Parameter(parameter_number, parameter_shapes[parameter_number],
-                    "parameter_" + std::to_string(parameter_number)));
+        b.Parameter(
+            parameter_number,
+            parameter_shapes[parameter_number],
+            "parameter_" + std::to_string(parameter_number)));
     CHECK(it_ok.second);
   }
   size_t current_unique = 0;
@@ -142,17 +183,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        const Value* lhs = node->inputs()[0];
-        const Value* rhs = node->inputs()[1];
-        const auto lhs_it = node_xla_ops.find(lhs->unique());
-        CHECK(lhs_it != node_xla_ops.end());
-        const auto rhs_it = node_xla_ops.find(rhs->unique());
-        CHECK(rhs_it != node_xla_ops.end());
-        xla::XlaOp xla_output =
-            buildBinaryXlaOp(node->kind(), lhs_it->second, rhs_it->second, &b);
-        CHECK_EQ(node->outputs().size(), 1);
-        const Value* res = node->outputs()[0];
-        current_unique = res->unique();
+        xla::XlaOp xla_output = build_binary_op(node, XLA_OP(0), XLA_OP(1), &b);
+        current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
@@ -162,17 +194,9 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported convolution";
           return at::nullopt;
         }
-        const Value* lhs = node->inputs()[0];
-        const Value* rhs = node->inputs()[1];
-        const auto lhs_it = node_xla_ops.find(lhs->unique());
-        CHECK(lhs_it != node_xla_ops.end());
-        const auto rhs_it = node_xla_ops.find(rhs->unique());
-        CHECK(rhs_it != node_xla_ops.end());
-        xla::XlaOp xla_output = build_convolution(node, lhs_it->second,
-                                                  rhs_it->second, &b);
-        CHECK_EQ(node->outputs().size(), 1);
-        const Value* res = node->outputs()[0];
-        current_unique = res->unique();
+        xla::XlaOp xla_output =
+            build_convolution(node, XLA_OP(0), XLA_OP(1), &b);
+        current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
@@ -192,23 +216,9 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
   return b.Build().ValueOrDie();
 }
 
-xla::XlaOp XlaCodeImpl::buildBinaryXlaOp(const NodeKind kind,
-                                         const xla::XlaOp& lhs,
-                                         const xla::XlaOp& rhs,
-                                         xla::XlaBuilder* b) const {
-  switch (kind) {
-    case aten::add: {
-      return b->Add(lhs, rhs);
-    }
-    case aten::mul: {
-      return b->Mul(lhs, rhs);
-    }
-    default:
-      LOG(FATAL) << "Invalid binary operator kind: " << kind;
-  }
-}
+#undef XLA_OP
 
-}  // namespace jit
-}  // namespace torch
+} // namespace jit
+} // namespace torch
 
-#endif  // WITH_XLA
+#endif // WITH_XLA
