@@ -101,6 +101,23 @@ at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
   return parameter_shapes;
 }
 
+namespace {
+
+xla::XlaOp build_convolution(const Node* node,
+                             const xla::XlaOp& lhs,
+                             const xla::XlaOp& rhs,
+                             xla::XlaBuilder* b) {
+  const auto stride_sym = Symbol::attr("stride");
+  CHECK(node->hasAttribute(stride_sym));
+  std::vector<int64_t> stride_attribute = node->is(stride_sym);
+  std::vector<int64> window_strides(stride_attribute.size());
+  std::copy(stride_attribute.begin(), stride_attribute.end(),
+            window_strides.begin());
+  return b->Conv(lhs, rhs, window_strides, xla::Padding::kValid);
+}
+
+}  // namespace
+
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
   xla::XlaBuilder b("xla_computation");
@@ -133,6 +150,26 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK(rhs_it != node_xla_ops.end());
         xla::XlaOp xla_output =
             buildBinaryXlaOp(node->kind(), lhs_it->second, rhs_it->second, &b);
+        CHECK_EQ(node->outputs().size(), 1);
+        const Value* res = node->outputs()[0];
+        current_unique = res->unique();
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::_convolution: {
+        if (node->inputs().size() != 3) {
+          LOG(INFO) << "Unsupported convolution";
+          return at::nullopt;
+        }
+        const Value* lhs = node->inputs()[0];
+        const Value* rhs = node->inputs()[1];
+        const auto lhs_it = node_xla_ops.find(lhs->unique());
+        CHECK(lhs_it != node_xla_ops.end());
+        const auto rhs_it = node_xla_ops.find(rhs->unique());
+        CHECK(rhs_it != node_xla_ops.end());
+        xla::XlaOp xla_output = build_convolution(node, lhs_it->second,
+                                                  rhs_it->second, &b);
         CHECK_EQ(node->outputs().size(), 1);
         const Value* res = node->outputs()[0];
         current_unique = res->unique();
