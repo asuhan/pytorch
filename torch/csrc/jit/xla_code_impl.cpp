@@ -251,6 +251,44 @@ at::optional<xla::XlaOp> build_log_softmax(const Node* node,
   return b->Sub(shifted_logits, b->Log(reduce), {batch_dim});
 }
 
+double one_elem_tensor_value(const at::Tensor& t) {
+  switch (t.type().scalarType()) {
+  case at::ScalarType::Long:
+    return *t.data<int64_t>();
+  case at::ScalarType::Double:
+    return *t.data<double>();
+  default:
+    LOG(FATAL) << "Type not supported";
+  }
+}
+
+xla::XlaOp build_threshold(const Node* node,
+                           const xla::XlaOp& input,
+                           xla::XlaBuilder* b) {
+  const auto threshold_sym = Symbol::attr("threshold");
+  CHECK(node->hasAttribute(threshold_sym));
+  const auto& threshold_tensor = node->t(threshold_sym);
+  CHECK_EQ(threshold_tensor.ndimension(), 0);
+  const auto threshold_literal =
+      xla::Literal::CreateR0<float>(one_elem_tensor_value(threshold_tensor));
+  const auto threshold = b->ConstantLiteral(*threshold_literal);
+  const auto value_sym = Symbol::attr("value");
+  CHECK(node->hasAttribute(value_sym));
+  const auto& value_tensor = node->t(value_sym);
+  CHECK_EQ(value_tensor.ndimension(), 0);
+  const auto value_literal =
+      xla::Literal::CreateR0<float>(one_elem_tensor_value(value_tensor));
+  const auto value = b->ConstantLiteral(*value_literal);
+  const auto& node_inputs = node->inputs();
+  const auto input_type = node_inputs[0]->type()->cast<TensorType>();
+  CHECK(input_type);
+  const std::vector<int64_t>& input_sizes = input_type->sizes();
+  std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
+  std::copy(input_sizes.begin(), input_sizes.end(), broadcast_sizes.begin());
+  return b->Select(
+      b->Gt(input, threshold), input, b->Broadcast(value, broadcast_sizes));
+}
+
 const xla::XlaOp& xla_op_for_input(
     const Node* node,
     const size_t input_index,
@@ -349,6 +387,14 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         const auto zero_literal = xla::Literal::CreateR0<float>(0);
         const auto xla_zero = b.ConstantLiteral(*zero_literal);
         xla::XlaOp xla_output = b.Max(XLA_OP(0), xla_zero);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::threshold: {
+        CHECK_EQ(node->inputs().size(), 1);
+        xla::XlaOp xla_output = build_threshold(node, XLA_OP(0), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
