@@ -173,17 +173,21 @@ xla::XlaOp build_addmm(
   return b->Add(dot, b->Reshape(bias, reshaped_bias_sizes));
 }
 
+xla::XlaComputation CreateMaxComputation() {
+  xla::XlaBuilder reduction_builder("xla_max_computation");
+  const auto x = reduction_builder.Parameter(
+      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
+  const auto y = reduction_builder.Parameter(
+      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
+  reduction_builder.Max(x, y);
+  return reduction_builder.Build().ConsumeValueOrDie();
+}
+
 xla::XlaOp build_max_pool2d(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  xla::XlaBuilder reduction_builder("xla_reduction_computation");
-  const auto y = reduction_builder.Parameter(
-      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
-  const auto x = reduction_builder.Parameter(
-      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
-  reduction_builder.Max(y, x);
-  const auto max_computation = reduction_builder.Build().ConsumeValueOrDie();
+  const auto max_computation = CreateMaxComputation();
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
   const auto kernel_size_sym = Symbol::attr("kernel_size");
   CHECK(node->hasAttribute(kernel_size_sym));
@@ -200,6 +204,50 @@ xla::XlaOp build_max_pool2d(
       window_dimensions,
       window_strides,
       xla::Padding::kValid);
+}
+
+xla::XlaComputation CreateAddComputation() {
+  xla::XlaBuilder reduction_builder("xla_add_computation");
+  const auto x = reduction_builder.Parameter(
+      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
+  const auto y = reduction_builder.Parameter(
+      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
+  reduction_builder.Add(x, y);
+  return reduction_builder.Build().ConsumeValueOrDie();
+}
+
+at::optional<xla::XlaOp> build_log_softmax(const Node* node,
+                                           const xla::XlaOp& logits,
+                                           xla::XlaBuilder* b) {
+  // Inspired from tf2xla.
+  const auto dim_sym = Symbol::attr("dim");
+  CHECK(node->hasAttribute(dim_sym));
+
+  int64_t dim = node->i(dim_sym);
+  if (dim != 0 && dim != 1) {
+    LOG(INFO) << "log_softmax not supported for dim=" << node->i(dim_sym);
+    return at::nullopt;
+  }
+
+  int batch_dim = 0;
+  int class_dim = 1;
+
+  if (dim == 0) {
+    std::swap(batch_dim, class_dim);
+  }
+
+  const auto max_func = CreateMaxComputation();
+  const auto min_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
+  const auto logits_max = b->Reduce(
+      logits, b->ConstantLiteral(min_value), max_func, {class_dim});
+  const auto shifted_logits = b->Sub(logits, logits_max, {batch_dim});
+  const auto exp_shifted = b->Exp(shifted_logits);
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  const auto reduce =
+        b->Reduce(exp_shifted, xla_zero,
+                  CreateAddComputation(), {class_dim});
+  return b->Sub(shifted_logits, b->Log(reduce), {batch_dim});
 }
 
 const xla::XlaOp& xla_op_for_input(
@@ -302,6 +350,17 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         xla::XlaOp xla_output = b.Max(XLA_OP(0), xla_zero);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::log_softmax: {
+        CHECK_EQ(node->inputs().size(), 1);
+        const auto xla_output_maybe = build_log_softmax(node, XLA_OP(0), &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
         break;
       }
