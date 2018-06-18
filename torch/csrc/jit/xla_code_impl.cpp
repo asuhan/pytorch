@@ -102,8 +102,7 @@ at::optional<at::Tensor> XlaCodeImpl::run(
   for (const auto result_dimension : result_shape.dimensions()) {
     dimensions.push_back(result_dimension);
   }
-  at::Tensor result_tensor = inputs.front();
-  result_tensor.resize_(dimensions);
+  at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
   std::copy(
       result_slice.begin(), result_slice.end(), result_tensor.data<float>());
   return result_tensor;
