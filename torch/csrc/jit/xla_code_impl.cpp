@@ -295,6 +295,16 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK(it_ok.second);
         break;
       }
+      case aten::relu: {
+        CHECK_EQ(node->inputs().size(), 1);
+        const auto zero_literal = xla::Literal::CreateR0<float>(0);
+        const auto xla_zero = b.ConstantLiteral(*zero_literal);
+        xla::XlaOp xla_output = b.Max(XLA_OP(0), xla_zero);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
       default:
         LOG(INFO) << "Unsupported operator";
         return at::nullopt;
