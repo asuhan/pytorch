@@ -8,15 +8,19 @@ namespace {
 
 using int64 = long long;
 
+std::vector<int64> xla_i64_list(const std::vector<int64_t>& input) {
+  std::vector<int64> output(input.size());
+  std::copy(input.begin(), input.end(), output.begin());
+  return output;
+}
+
 xla::Shape make_xla_shape(
     const at::IntList& tensor_dimensions,
     const xla::PrimitiveType type) {
   if (tensor_dimensions.size() == 1 && tensor_dimensions.front() == 1) {
     return xla::ShapeUtil::MakeShapeWithLayout(type, {}, {});
   }
-  std::vector<int64> dimensions(tensor_dimensions.size());
-  std::copy(
-      tensor_dimensions.begin(), tensor_dimensions.end(), dimensions.begin());
+  const auto dimensions = xla_i64_list(tensor_dimensions);
   std::vector<int64> layout(dimensions.size());
   // XLA uses minor-to-major.
   std::iota(layout.rbegin(), layout.rend(), 0);
@@ -147,10 +151,7 @@ xla::XlaOp build_convolution(
     xla::XlaBuilder* b) {
   const auto stride_sym = Symbol::attr("stride");
   CHECK(node->hasAttribute(stride_sym));
-  std::vector<int64_t> stride_attribute = node->is(stride_sym);
-  std::vector<int64> window_strides(stride_attribute.size());
-  std::copy(
-      stride_attribute.begin(), stride_attribute.end(), window_strides.begin());
+  const auto window_strides = xla_i64_list(node->is(stride_sym));
   return b->Add(b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias);
 }
 
@@ -170,6 +171,35 @@ xla::XlaOp build_addmm(
   reshaped_bias_sizes.push_back(1);
   reshaped_bias_sizes.push_back(bias_size.front());
   return b->Add(dot, b->Reshape(bias, reshaped_bias_sizes));
+}
+
+xla::XlaOp build_max_pool2d(
+    const Node* node,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
+  xla::XlaBuilder reduction_builder("xla_reduction_computation");
+  const auto y = reduction_builder.Parameter(
+      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
+  const auto x = reduction_builder.Parameter(
+      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
+  reduction_builder.Max(y, x);
+  const auto max_computation = reduction_builder.Build().ConsumeValueOrDie();
+  const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
+  const auto kernel_size_sym = Symbol::attr("kernel_size");
+  CHECK(node->hasAttribute(kernel_size_sym));
+  std::vector<int64> window_dimensions;
+  window_dimensions.resize(2, 1);
+  const auto kernel_size = xla_i64_list(node->is(kernel_size_sym));
+  window_dimensions.insert(
+      window_dimensions.end(), kernel_size.begin(), kernel_size.end());
+  const auto window_strides = window_dimensions;
+  return b->ReduceWindow(
+      input,
+      b->ConstantLiteral(init_value),
+      max_computation,
+      window_dimensions,
+      window_strides,
+      xla::Padding::kValid);
 }
 
 const xla::XlaOp& xla_op_for_input(
@@ -253,6 +283,14 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         xla::XlaOp xla_output =
             build_addmm(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
         current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::max_pool2d: {
+        CHECK_EQ(node->inputs().size(), 1);
+        xla::XlaOp xla_output = build_max_pool2d(node, XLA_OP(0), &b);
+        current_unique = node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
