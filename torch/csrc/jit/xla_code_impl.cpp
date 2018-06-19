@@ -196,6 +196,12 @@ xla::XlaOp build_convolution(
   return b->Add(b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias);
 }
 
+std::vector<int64_t> tensor_sizes(const Value* tensor) {
+  const auto tensor_type = tensor->type()->cast<TensorType>();
+  CHECK(tensor_type);
+  return tensor_type->sizes();
+}
+
 xla::XlaOp build_addmm(
     const Node* node,
     const xla::XlaOp& bias,
@@ -203,14 +209,12 @@ xla::XlaOp build_addmm(
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
   const auto& node_inputs = node->inputs();
-  xla::XlaOp dot = b->Dot(weights, input);
-  const auto bias_type = node_inputs[0]->type()->cast<TensorType>();
-  CHECK(bias_type);
-  const std::vector<int64_t>& bias_size = bias_type->sizes();
+  const auto bias_size = tensor_sizes(node_inputs[0]);
   CHECK_EQ(bias_size.size(), 1);
   std::vector<int64> reshaped_bias_sizes;
   reshaped_bias_sizes.push_back(1);
   reshaped_bias_sizes.push_back(bias_size.front());
+  xla::XlaOp dot = b->Dot(weights, input);
   return b->Add(dot, b->Reshape(bias, reshaped_bias_sizes));
 }
 
@@ -319,18 +323,29 @@ xla::XlaOp build_threshold(
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
   const auto& node_inputs = node->inputs();
-  const auto input_type = node_inputs[0]->type()->cast<TensorType>();
-  CHECK(input_type);
   const auto threshold_literal =
       xla::Literal::CreateR0<float>(float_attr(node, node_inputs[1]->unique()));
   const auto threshold = b->ConstantLiteral(*threshold_literal);
   const auto value_literal =
       xla::Literal::CreateR0<float>(float_attr(node, node_inputs[2]->unique()));
   const auto value = b->ConstantLiteral(*value_literal);
-  const auto& input_sizes = input_type->sizes();
+  const auto input_sizes = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
   return b->Select(
       b->Gt(input, threshold), input, b->Broadcast(value, broadcast_sizes));
+}
+
+xla::XlaOp build_view(
+    const Node* node,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
+  const auto node_inputs = node->inputs();
+  CHECK_EQ(node_inputs.size(), 2);
+  const auto input_sizes = tensor_sizes(node_inputs[0]);
+  const auto node_outputs = node->outputs();
+  CHECK_EQ(node_outputs.size(), 1);
+  const auto output_sizes = tensor_sizes(node_outputs[0]);
+  return b->Reshape(input, xla_i64_list(output_sizes));
 }
 
 const xla::XlaOp& xla_op_for_input(
@@ -450,6 +465,14 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         current_unique = output_id(node);
         const auto it_ok =
             node_xla_ops.emplace(current_unique, *xla_output_maybe);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::view: {
+        CHECK_EQ(node->inputs().size(), 2);
+        xla::XlaOp xla_output = build_view(node, XLA_OP(0), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
       }
