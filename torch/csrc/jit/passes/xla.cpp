@@ -1,6 +1,7 @@
 #include "torch/csrc/jit/passes/xla.h"
 
-namespace torch { namespace jit {
+namespace torch {
+namespace jit {
 
 namespace {
 
@@ -25,4 +26,5 @@ std::shared_ptr<XlaModule> ToXLA(script::Module& module) {
   return std::make_shared<XlaModule>(method, model_parameters);
 }
 
-}}
+} // namespace jit
+} // namespace torch

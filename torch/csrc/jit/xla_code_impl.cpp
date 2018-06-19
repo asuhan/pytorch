@@ -217,9 +217,10 @@ xla::XlaComputation CreateAddComputation() {
   return reduction_builder.Build().ConsumeValueOrDie();
 }
 
-at::optional<xla::XlaOp> build_log_softmax(const Node* node,
-                                           const xla::XlaOp& logits,
-                                           xla::XlaBuilder* b) {
+at::optional<xla::XlaOp> build_log_softmax(
+    const Node* node,
+    const xla::XlaOp& logits,
+    xla::XlaBuilder* b) {
   // Inspired from tf2xla.
   const auto dim_sym = Symbol::attr("dim");
   CHECK(node->hasAttribute(dim_sym));
@@ -239,32 +240,32 @@ at::optional<xla::XlaOp> build_log_softmax(const Node* node,
 
   const auto max_func = CreateMaxComputation();
   const auto min_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
-  const auto logits_max = b->Reduce(
-      logits, b->ConstantLiteral(min_value), max_func, {class_dim});
+  const auto logits_max =
+      b->Reduce(logits, b->ConstantLiteral(min_value), max_func, {class_dim});
   const auto shifted_logits = b->Sub(logits, logits_max, {batch_dim});
   const auto exp_shifted = b->Exp(shifted_logits);
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
   const auto reduce =
-        b->Reduce(exp_shifted, xla_zero,
-                  CreateAddComputation(), {class_dim});
+      b->Reduce(exp_shifted, xla_zero, CreateAddComputation(), {class_dim});
   return b->Sub(shifted_logits, b->Log(reduce), {batch_dim});
 }
 
 double one_elem_tensor_value(const at::Tensor& t) {
   switch (t.type().scalarType()) {
-  case at::ScalarType::Long:
-    return *t.data<int64_t>();
-  case at::ScalarType::Double:
-    return *t.data<double>();
-  default:
-    LOG(FATAL) << "Type not supported";
+    case at::ScalarType::Long:
+      return *t.data<int64_t>();
+    case at::ScalarType::Double:
+      return *t.data<double>();
+    default:
+      LOG(FATAL) << "Type not supported";
   }
 }
 
-xla::XlaOp build_threshold(const Node* node,
-                           const xla::XlaOp& input,
-                           xla::XlaBuilder* b) {
+xla::XlaOp build_threshold(
+    const Node* node,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
   const auto threshold_sym = Symbol::attr("threshold");
   CHECK(node->hasAttribute(threshold_sym));
   const auto& threshold_tensor = node->t(threshold_sym);
@@ -407,7 +408,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
         current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, *xla_output_maybe);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
         break;
       }
