@@ -32,8 +32,10 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
   switch (scalar_type) {
     case at::ScalarType::Float:
       return xla::PrimitiveType::F32;
+    case at::ScalarType::Long:
+      return xla::PrimitiveType::S64;
     default:
-      LOG(INFO) << "Type not supported";
+      LOG(INFO) << "Type not supported: " << scalar_type;
       return at::nullopt;
   }
 }
@@ -364,7 +366,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       default:
-        LOG(INFO) << "Unsupported operator";
+        LOG(INFO) << "Unsupported operator: " << node->kind().toQualString();
         return at::nullopt;
     }
   }
