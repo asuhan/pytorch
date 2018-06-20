@@ -37,7 +37,32 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
   }
 }
 
-std::unique_ptr<xla::GlobalData> tensor_to_xla(
+template <class NativeT>
+std::vector<NativeT> linearize_tensor(
+    const at::Tensor& t,
+    const size_t total_elements);
+
+template <>
+std::vector<float> linearize_tensor<float>(
+    const at::Tensor& t,
+    const size_t total_elements) {
+  std::vector<float> values(total_elements);
+  std::copy(t.data<float>(), t.data<float>() + total_elements, values.begin());
+  return values;
+}
+
+template <>
+std::vector<int64> linearize_tensor<int64>(
+    const at::Tensor& t,
+    const size_t total_elements) {
+  std::vector<int64> values(total_elements);
+  std::copy(
+      t.data<int64_t>(), t.data<int64_t>() + total_elements, values.begin());
+  return values;
+}
+
+template <class NativeT>
+std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
     const at::Tensor& param_tensor,
     const xla::Shape& param_shape) {
   std::vector<int64> dimension_sizes;
@@ -46,16 +71,23 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla(
     dimension_sizes.push_back(dimension_size);
     total_elements *= dimension_size;
   }
-  xla::Array<float> parameter_xla_array(dimension_sizes);
-  std::vector<float> values_container(total_elements);
-  std::copy(
-      param_tensor.data<float>(),
-      param_tensor.data<float>() + total_elements,
-      values_container.begin());
-  parameter_xla_array.SetValues(values_container);
+  xla::Array<NativeT> parameter_xla_array(dimension_sizes);
+  parameter_xla_array.SetValues(
+      linearize_tensor<NativeT>(param_tensor, total_elements));
   xla::Literal literal(param_shape);
   literal.PopulateFromArray(parameter_xla_array);
   return TransferParameterToServer(literal);
+}
+
+std::unique_ptr<xla::GlobalData> tensor_to_xla(
+    const at::Tensor& param_tensor,
+    const xla::Shape& param_shape) {
+  switch (param_tensor.type().scalarType()) {
+    case at::ScalarType::Float:
+      return tensor_to_xla_impl<float>(param_tensor, param_shape);
+    case at::ScalarType::Long:
+      return tensor_to_xla_impl<int64>(param_tensor, param_shape);
+  }
 }
 
 } // namespace
