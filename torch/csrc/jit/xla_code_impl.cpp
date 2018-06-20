@@ -378,6 +378,16 @@ xla::XlaOp build_view(
   return b->Reshape(input, xla_i64_list(output_sizes));
 }
 
+xla::XlaOp build_batch_norm(
+    const Node* node,
+    const xla::XlaOp& input,
+    const xla::XlaOp& weight,
+    const xla::XlaOp& bias,
+    xla::XlaBuilder* b) {
+  return b->GetTupleElement(
+      b->BatchNormTraining(input, weight, bias, 1e-05, 0), 0);
+}
+
 const xla::XlaOp& xla_op_for_input(
     const Node* node,
     const size_t input_index,
@@ -501,6 +511,15 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::view: {
         CHECK_EQ(node->inputs().size(), 2);
         xla::XlaOp xla_output = build_view(node, XLA_OP(0), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::batch_norm: {
+        CHECK_EQ(node->inputs().size(), 9);
+        xla::XlaOp xla_output =
+            build_batch_norm(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);

@@ -154,6 +154,27 @@ class TestLogSoftmax(TestCase):
             self.assertEqual(out.data, expected.data)
 
 
+class TestBatchNorm(TestCase):
+    def test(self):
+
+        class XlaBatchNorm(nn.Module):
+            def __init__(self, training):
+                super(XlaBatchNorm, self).__init__()
+                if training:
+                    self.bn = nn.BatchNorm2d(1)
+                else:
+                    self.bn = nn.BatchNorm2d(1, track_running_stats=False)
+
+            def forward(self, x):
+                return self.bn(x)
+
+        x = torch.rand(1, 1, 5, 7)
+        model = XlaBatchNorm(True)
+        out = _xla_run(model, x)
+        expected = model(x)
+        self.assertEqual(out.data, expected.data)
+
+
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
     run_tests()
