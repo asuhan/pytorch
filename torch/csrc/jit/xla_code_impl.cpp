@@ -46,7 +46,8 @@ template <>
 std::vector<float> linearize_tensor<float>(
     const at::Tensor& t,
     const size_t total_elements) {
-  JIT_ASSERT(t.is_contiguous()); // the logic below works only for contiguous Tensors
+  JIT_ASSERT(
+      t.is_contiguous()); // the logic below works only for contiguous Tensors
   std::vector<float> values(total_elements);
   std::copy(t.data<float>(), t.data<float>() + total_elements, values.begin());
   return values;
@@ -56,7 +57,8 @@ template <>
 std::vector<int64> linearize_tensor<int64>(
     const at::Tensor& t,
     const size_t total_elements) {
-  JIT_ASSERT(t.is_contiguous()); // the logic below works only for contiguous Tensors
+  JIT_ASSERT(
+      t.is_contiguous()); // the logic below works only for contiguous Tensors
   std::vector<int64> values(total_elements);
   std::copy(
       t.data<int64_t>(), t.data<int64_t>() + total_elements, values.begin());
@@ -216,6 +218,20 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
 }
 
 xla::XlaOp build_convolution(
+    const Node* node,
+    const xla::XlaOp& lhs,
+    const xla::XlaOp& rhs,
+    xla::XlaBuilder* b) {
+  const auto& node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), size_t(4));
+  const auto window_strides =
+      xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
+  const auto node_outputs = node->outputs();
+  CHECK_EQ(node_outputs.size(), 1);
+  return b->Conv(lhs, rhs, window_strides, xla::Padding::kValid);
+}
+
+xla::XlaOp build_convolution_bias(
     const Node* node,
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
@@ -392,12 +408,21 @@ xla::XlaOp build_batch_norm(
       b->BatchNormTraining(input, weight, bias, eps, 0), 0);
 }
 
-const xla::XlaOp& xla_op_for_input(
+at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
     const size_t input_index,
-    const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops) {
+    const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
+    const std::unordered_set<size_t> undefined_inputs) {
   const auto& node_inputs = node->inputs();
   const auto input = node_inputs.at(input_index);
+
+  // check if is prim::Undefined
+  const auto undefined_it = undefined_inputs.find(input->unique());
+  if (undefined_it != undefined_inputs.end()) {
+    return at::nullopt;
+  }
+
+  // check in constructed xla ops
   const auto xla_op_it = node_xla_ops.find(input->unique());
   CHECK(xla_op_it != node_xla_ops.end());
   return xla_op_it->second;
@@ -411,12 +436,15 @@ size_t output_id(const Node* node) {
 
 } // namespace
 
-#define XLA_OP(input_index) xla_op_for_input(node, input_index, node_xla_ops)
+#define XLA_OP(input_index) \
+  xla_op_for_input(node, input_index, node_xla_ops, undefined_inputs)
 
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
   xla::XlaBuilder b("xla_computation");
   std::unordered_map<size_t, xla::XlaOp> node_xla_ops;
+  std::unordered_set<size_t> undefined_inputs;
+
   auto nodes = graph_->block()->nodes();
   const auto graph_inputs = graph_->inputs();
   for (size_t parameter_number = 0; parameter_number < graph_inputs.size();
@@ -439,16 +467,26 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        xla::XlaOp xla_output = build_binary_op(node, XLA_OP(0), XLA_OP(1), &b);
+        xla::XlaOp xla_output =
+            build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
       }
       case aten::_convolution: {
-        CHECK_GE(node->inputs().size(), size_t(3));
-        xla::XlaOp xla_output =
-            build_convolution(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
+        if (node->inputs().size() < 3) {
+          LOG(INFO) << "Unsupported convolution";
+          return at::nullopt;
+        }
+
+        xla::XlaOp xla_output;
+        if (XLA_OP(2).has_value()) { // bias exists
+          xla_output = build_convolution_bias(
+              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+        } else {
+          xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
+        }
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -456,7 +494,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::t: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = b.Transpose(XLA_OP(0), {1, 0});
+        xla::XlaOp xla_output = b.Transpose(*XLA_OP(0), {1, 0});
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -468,7 +506,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
         xla::XlaOp xla_output =
-            build_addmm(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
+            build_addmm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -476,7 +514,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::max_pool2d_with_indices: {
         CHECK_GE(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_max_pool2d(node, XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
         current_unique = node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -486,7 +524,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK_EQ(node->inputs().size(), 1);
         const auto zero_literal = xla::Literal::CreateR0<float>(0);
         const auto xla_zero = b.ConstantLiteral(*zero_literal);
-        xla::XlaOp xla_output = b.Max(XLA_OP(0), xla_zero);
+        xla::XlaOp xla_output = b.Max(*XLA_OP(0), xla_zero);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -494,7 +532,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::threshold: {
         CHECK_EQ(node->inputs().size(), 3);
-        xla::XlaOp xla_output = build_threshold(node, XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_threshold(node, *XLA_OP(0), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -502,7 +540,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::log_softmax: {
         CHECK_EQ(node->inputs().size(), size_t(2));
-        const auto xla_output_maybe = build_log_softmax(node, XLA_OP(0), &b);
+        const auto xla_output_maybe = build_log_softmax(node, *XLA_OP(0), &b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -514,7 +552,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::view: {
         CHECK_EQ(node->inputs().size(), 2);
-        xla::XlaOp xla_output = build_view(node, XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_view(node, *XLA_OP(0), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -523,7 +561,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::batch_norm: {
         CHECK_EQ(node->inputs().size(), 9);
         xla::XlaOp xla_output =
-            build_batch_norm(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
+            build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -531,6 +569,11 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case prim::Constant:
       case prim::ListConstruct: {
+        break;
+      }
+      case prim::Undefined: {
+        current_unique = output_id(node);
+        undefined_inputs.emplace(current_unique);
         break;
       }
       default:

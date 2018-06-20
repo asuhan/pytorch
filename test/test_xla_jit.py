@@ -107,18 +107,19 @@ class TestConv(TestCase):
     def test(self):
 
         class XlaConv(nn.Module):
-            def __init__(self):
+            def __init__(self, bias):
                 super(XlaConv, self).__init__()
-                self.conv = nn.Conv2d(1, 1, 3)
+                self.conv = nn.Conv2d(1, 1, 3, bias=bias)
 
             def forward(self, x):
                 return self.conv(x)
 
-        x = torch.randn(1, 1, 3, 5)
-        model = XlaConv()
-        out = _xla_run(model, x)
-        expected = model(x)
-        self.assertEqual(out.data, expected.data)
+        for bias in [True, False]:
+            x = torch.randn(1, 1, 3, 5)
+            model = XlaConv(bias)
+            out = _xla_run(model, x)
+            expected = model(x)
+            self.assertEqual(out.data, expected.data)
 
 
 class TestMaxPool(TestCase):
