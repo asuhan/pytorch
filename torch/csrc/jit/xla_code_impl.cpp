@@ -300,6 +300,17 @@ xla::XlaOp build_max_pool2d(
       xla::Padding::kValid);
 }
 
+bool avg_pool2d_supported(const Node* node) {
+  const auto& node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), size_t(6));
+  const auto ceil_mode = int_attr(node, node_inputs[4]->unique());
+  if (ceil_mode) {
+    LOG(INFO) << "ceil_mode not supported for avg_pool2d yet";
+    return false;
+  }
+  return true;
+}
+
 xla::XlaComputation CreateAddComputation() {
   xla::XlaBuilder reduction_builder("xla_add_computation");
   const auto x = reduction_builder.Parameter(
@@ -308,6 +319,80 @@ xla::XlaComputation CreateAddComputation() {
       1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
   reduction_builder.Add(x, y);
   return reduction_builder.Build().ConsumeValueOrDie();
+}
+
+at::optional<xla::XlaOp> build_avg_pool2d(
+    const Node* node,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
+  // Inspired from tf2xla.
+  if (!avg_pool2d_supported(node)) {
+    return at::nullopt;
+  }
+  const auto& node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), size_t(6));
+  const auto kernel_size =
+      xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
+  const auto stride =
+      xla_i64_list(int_list_attr(node, node_inputs[2]->unique()));
+  const auto add_computation = CreateAddComputation();
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  std::vector<int64> window_dimensions;
+  window_dimensions.resize(2, 1);
+  window_dimensions.insert(
+      window_dimensions.end(), kernel_size.begin(), kernel_size.end());
+  std::vector<int64> window_strides;
+  window_strides.resize(2, 1);
+  window_strides.insert(window_strides.end(), stride.begin(), stride.end());
+  const auto padding =
+      xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
+  CHECK_EQ(padding.size(), 2);
+  xla::PaddingConfig padding_config;
+  for (int i = 0; i < 2; ++i) {
+    padding_config.add_dimensions();
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto* dims = padding_config.add_dimensions();
+    dims->set_edge_padding_low(padding[i]);
+    dims->set_edge_padding_high(padding[i]);
+  }
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  const auto padded_input = b->Pad(input, xla_zero, padding_config);
+  const auto sum = b->ReduceWindow(
+      padded_input,
+      xla_zero,
+      add_computation,
+      window_dimensions,
+      window_strides,
+      xla::Padding::kValid);
+  const auto count_include_pad = int_attr(node, node_inputs[5]->unique());
+  if (count_include_pad) {
+    const auto kernel_elements = std::accumulate(
+        kernel_size.begin(),
+        kernel_size.end(),
+        1,
+        [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
+    const auto count_literal = xla::Literal::CreateR0<float>(kernel_elements);
+    const auto count = b->ConstantLiteral(*count_literal);
+    return b->Div(sum, count);
+  } else {
+    auto input_size = xla_i64_list(tensor_sizes(node_inputs[0]));
+    CHECK_EQ(input_size.size(), 4);
+    input_size[2] += padding[0];
+    input_size[3] += padding[1];
+    // Build a matrix of all 1s, with the same width/height as the input.
+    const auto one_literal = xla::Literal::CreateR0<float>(1);
+    const auto ones =
+        b->Broadcast(b->ConstantLiteral(*one_literal), input_size);
+    const auto counts = b->ReduceWindow(
+        ones,
+        xla_zero,
+        CreateAddComputation(),
+        window_dimensions,
+        window_strides,
+        xla::Padding::kSame);
+    return b->Div(sum, counts);
+  }
 }
 
 at::optional<xla::XlaOp> build_log_softmax(
@@ -615,6 +700,18 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
         current_unique = node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::avg_pool2d: {
+        CHECK_GE(node->inputs().size(), 1);
+        const auto xla_output_maybe = build_avg_pool2d(node, *XLA_OP(0), &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
         break;
       }
