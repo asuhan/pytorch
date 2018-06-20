@@ -85,6 +85,27 @@ class TestView(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+class TestStack(TestCase):
+    def test(self):
+
+        class XlaStack(nn.Module):
+            def __init__(self, dim):
+                super(XlaStack, self).__init__()
+                self.dim = dim
+
+            def forward(self, x, y):
+                return torch.stack((x, y), self.dim)
+
+        x = torch.rand(2, 5)
+        y = torch.rand(2, 5)
+        for dim in [0, 1]:
+            model = XlaStack(dim)
+            traced_model = torch.jit.trace(x, y)(model)
+            out = torch._C._to_xla_module(traced_model)(x, y)
+            expected = model(x, y)
+            self.assertEqual(out.data, expected.data)
+
+
 class TestExpand(TestCase):
     def test(self):
 
