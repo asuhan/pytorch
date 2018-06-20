@@ -170,6 +170,29 @@ class TestMaxPool(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+class TestAvgPool(TestCase):
+    def test(self):
+
+        class XlaAvgPool(nn.Module):
+            def __init__(self, stride, padding, count_include_pad):
+                super(XlaAvgPool, self).__init__()
+                self.stride = stride
+                self.padding = padding
+                self.count_include_pad = count_include_pad
+
+            def forward(self, x):
+                return F.avg_pool2d(x, 2, self.stride, self.padding, False, self.count_include_pad)
+
+        x = torch.rand(1, 1, 3, 3)
+        for stride in [1, 2]:
+            for padding in [0, 1]:
+                for count_include_pad in [False, True]:
+                    model = XlaAvgPool(stride, padding, True)
+                    out = _xla_run(model, x)
+                    expected = model(x)
+                    self.assertEqual(out.data, expected.data)
+
+
 class TestLogSoftmax(TestCase):
     def test(self):
 
