@@ -85,6 +85,20 @@ class TestView(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+class TestExpand(TestCase):
+    def test(self):
+
+        class XlaExpand(nn.Module):
+            def forward(self, x):
+                return x.expand(2, 5)
+
+        x = torch.rand(5)
+        model = XlaExpand()
+        out = _xla_run(model, x)
+        expected = model(x)
+        self.assertEqual(out.data, expected.data)
+
+
 class TestLinear(TestCase):
     def test(self):
 

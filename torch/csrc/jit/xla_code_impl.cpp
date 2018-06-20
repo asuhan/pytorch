@@ -396,6 +396,55 @@ xla::XlaOp build_view(
   return b->Reshape(input, xla_i64_list(output_sizes));
 }
 
+xla::XlaOp build_expand(
+    const Node* node,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
+  const auto node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), 1);
+  auto input_sizes = tensor_sizes(node_inputs[0]);
+  const auto node_outputs = node->outputs();
+  CHECK_EQ(node_outputs.size(), 1);
+  const auto output_sizes = tensor_sizes(node_outputs[0]);
+  // Adjust the rank of the input to match the rank of the output.
+  CHECK_LE(input_sizes.size(), output_sizes.size());
+  for (size_t i = 0; i < output_sizes.size() - input_sizes.size(); ++i) {
+    input_sizes.insert(input_sizes.begin(), 1);
+  }
+  const auto implicit_reshape = b->Reshape(input, xla_i64_list(input_sizes));
+  // Squeeze the trivial (of size 1) dimensions.
+  std::vector<int64> non_singleton_dimensions;
+  std::copy_if(
+      input_sizes.begin(),
+      input_sizes.end(),
+      std::back_inserter(non_singleton_dimensions),
+      [](const size_t dim_size) { return dim_size != 1; });
+  const auto squeezed_input =
+      b->Reshape(implicit_reshape, non_singleton_dimensions);
+  // Broadcast the squeezed tensor, the additional dimensions are to the left.
+  std::vector<int64> broadcast_sizes;
+  for (size_t i = 0; i < input_sizes.size(); ++i) {
+    if (output_sizes[i] != input_sizes[i]) {
+      CHECK_EQ(input_sizes[i], 1);
+      broadcast_sizes.push_back(output_sizes[i]);
+    }
+  }
+  const auto broadcast = b->Broadcast(squeezed_input, broadcast_sizes);
+  // Bring the dimensions added by broadcast where the trivial dimensions were.
+  std::vector<int64> reshape_permutation;
+  for (size_t i = 0; i < input_sizes.size(); ++i) {
+    if (input_sizes[i] == 1) {
+      reshape_permutation.push_back(i);
+    }
+  }
+  for (size_t i = 0; i < input_sizes.size(); ++i) {
+    if (input_sizes[i] != 1) {
+      reshape_permutation.push_back(i);
+    }
+  }
+  return b->Reshape(broadcast, reshape_permutation, xla_i64_list(output_sizes));
+}
+
 xla::XlaOp build_batch_norm(
     const Node* node,
     const xla::XlaOp& input,
@@ -553,6 +602,14 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::view: {
         CHECK_EQ(node->inputs().size(), 2);
         xla::XlaOp xla_output = build_view(node, *XLA_OP(0), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::expand: {
+        CHECK_GE(node->inputs().size(), 1);
+        xla::XlaOp xla_output = build_expand(node, *XLA_OP(0), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
