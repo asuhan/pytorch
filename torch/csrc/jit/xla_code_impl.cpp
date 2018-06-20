@@ -46,7 +46,8 @@ template <>
 std::vector<float> linearize_tensor<float>(
     const at::Tensor& t,
     const size_t total_elements) {
-  JIT_ASSERT(t.is_contiguous()); // the logic below works only for contiguous Tensors
+  JIT_ASSERT(
+      t.is_contiguous()); // the logic below works only for contiguous Tensors
   std::vector<float> values(total_elements);
   std::copy(t.data<float>(), t.data<float>() + total_elements, values.begin());
   return values;
@@ -56,7 +57,8 @@ template <>
 std::vector<int64> linearize_tensor<int64>(
     const at::Tensor& t,
     const size_t total_elements) {
-  JIT_ASSERT(t.is_contiguous()); // the logic below works only for contiguous Tensors
+  JIT_ASSERT(
+      t.is_contiguous()); // the logic below works only for contiguous Tensors
   std::vector<int64> values(total_elements);
   std::copy(
       t.data<int64_t>(), t.data<int64_t>() + total_elements, values.begin());
@@ -363,7 +365,7 @@ xla::XlaOp build_batch_norm(
       b->BatchNormTraining(input, weight, bias, eps, 0), 0);
 }
 
- at::optional<const xla::XlaOp&> xla_op_for_input(
+at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
     const size_t input_index,
     const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
@@ -391,7 +393,8 @@ size_t output_id(const Node* node) {
 
 } // namespace
 
-#define XLA_OP(input_index) xla_op_for_input(node, input_index, node_xla_ops, undefined_inputs)
+#define XLA_OP(input_index) \
+  xla_op_for_input(node, input_index, node_xla_ops, undefined_inputs)
 
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
@@ -421,7 +424,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        xla::XlaOp xla_output = build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
+        xla::XlaOp xla_output =
+            build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -433,12 +437,13 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
 
-	xla::XlaOp xla_output;
-	if (XLA_OP(2).has_value()) { // bias exists
-	  xla_output = build_convolution_bias(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
-	} else {
-	  xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
-	}
+        xla::XlaOp xla_output;
+        if (XLA_OP(2).has_value()) { // bias exists
+          xla_output = build_convolution_bias(
+              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+        } else {
+          xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
+        }
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -521,8 +526,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case prim::Undefined: {
         current_unique = output_id(node);
-	undefined_inputs.emplace(current_unique);
-	break;
+        undefined_inputs.emplace(current_unique);
+        break;
       }
       default:
         LOG(INFO) << "Unsupported operator: " << node->kind().toQualString();
