@@ -46,6 +46,7 @@ template <>
 std::vector<float> linearize_tensor<float>(
     const at::Tensor& t,
     const size_t total_elements) {
+  JIT_ASSERT(t.is_contiguous()); // the logic below works only for contiguous Tensors
   std::vector<float> values(total_elements);
   std::copy(t.data<float>(), t.data<float>() + total_elements, values.begin());
   return values;
@@ -55,6 +56,7 @@ template <>
 std::vector<int64> linearize_tensor<int64>(
     const at::Tensor& t,
     const size_t total_elements) {
+  JIT_ASSERT(t.is_contiguous()); // the logic below works only for contiguous Tensors
   std::vector<int64> values(total_elements);
   std::copy(
       t.data<int64_t>(), t.data<int64_t>() + total_elements, values.begin());
