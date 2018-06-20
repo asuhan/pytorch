@@ -17,9 +17,6 @@ std::vector<int64> xla_i64_list(const at::IntList& input) {
 xla::Shape make_xla_shape(
     const at::IntList& tensor_dimensions,
     const xla::PrimitiveType type) {
-  if (tensor_dimensions.size() == 1 && tensor_dimensions.front() == 1) {
-    return xla::ShapeUtil::MakeShapeWithLayout(type, {}, {});
-  }
   const auto dimensions = xla_i64_list(tensor_dimensions);
   std::vector<int64> layout(dimensions.size());
   // XLA uses minor-to-major.
@@ -48,11 +45,6 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla(
   for (const auto dimension_size : param_tensor.sizes()) {
     dimension_sizes.push_back(dimension_size);
     total_elements *= dimension_size;
-  }
-  if (total_elements == 1) {
-    const auto scalar_literal =
-        xla::Literal::CreateR0<float>(*param_tensor.data<float>());
-    return TransferParameterToServer(*scalar_literal);
   }
   xla::Array<float> parameter_xla_array(dimension_sizes);
   std::vector<float> values_container(total_elements);
@@ -183,6 +175,12 @@ std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
   CHECK(false) << "Constant with id " << id << " not found.";
 }
 
+std::vector<int64_t> tensor_sizes(const Value* tensor) {
+  const auto tensor_type = tensor->type()->cast<TensorType>();
+  CHECK(tensor_type);
+  return tensor_type->sizes();
+}
+
 xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
@@ -193,13 +191,13 @@ xla::XlaOp build_convolution(
   CHECK_GE(node_inputs.size(), size_t(4));
   const auto window_strides =
       xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
-  return b->Add(b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias);
-}
-
-std::vector<int64_t> tensor_sizes(const Value* tensor) {
-  const auto tensor_type = tensor->type()->cast<TensorType>();
-  CHECK(tensor_type);
-  return tensor_type->sizes();
+  const auto node_outputs = node->outputs();
+  CHECK_EQ(node_outputs.size(), 1);
+  const auto bias_size = xla_i64_list(tensor_sizes(node_outputs[0]));
+  const auto bias_scalar = b->Reshape(bias, {});
+  return b->Add(
+      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid),
+      b->Broadcast(bias_scalar, bias_size));
 }
 
 xla::XlaOp build_addmm(
