@@ -445,6 +445,55 @@ xla::XlaOp build_expand(
   return b->Reshape(broadcast, reshape_permutation, xla_i64_list(output_sizes));
 }
 
+std::vector<const Value*> input_list_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  std::vector<const Value*> result;
+  for (const auto node : nodes) {
+    if (node->kind() != prim::ListConstruct) {
+      continue;
+    }
+    const auto& node_outputs = node->outputs();
+    CHECK_EQ(node_outputs.size(), size_t(1));
+    const auto output = node_outputs[0];
+    if (output->unique() != id) {
+      continue;
+    }
+    const auto& node_inputs = node->inputs();
+    for (const auto input : node_inputs) {
+      result.push_back(input);
+    }
+    return result;
+  }
+  CHECK(false) << "Constant with id " << id << " not found.";
+}
+
+at::optional<xla::XlaOp> build_stack(
+    const Node* node,
+    const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
+    const std::unordered_set<size_t>& undefined_inputs,
+    xla::XlaBuilder* b) {
+  const auto& node_inputs = node->inputs();
+  CHECK_EQ(node_inputs.size(), size_t(2));
+  const auto stack_inputs = input_list_attr(node, node_inputs[0]->unique());
+  const auto dim = int_attr(node, node_inputs[1]->unique());
+  std::vector<xla::XlaOp> reshaped_inputs;
+  // Reshape inputs along the dim axis.
+  for (size_t i = 0; i < stack_inputs.size(); ++i) {
+    auto reshaped_input_size = xla_i64_list(tensor_sizes(stack_inputs[i]));
+    reshaped_input_size.insert(reshaped_input_size.begin() + dim, 1);
+    const auto stack_input = stack_inputs[i];
+    if (undefined_inputs.find(stack_input->unique()) !=
+        undefined_inputs.end()) {
+      return at::nullopt;
+    }
+    const auto xla_op_it = node_xla_ops.find(stack_input->unique());
+    CHECK(xla_op_it != node_xla_ops.end());
+    reshaped_inputs.push_back(
+        b->Reshape(xla_op_it->second, reshaped_input_size));
+  }
+  return b->ConcatInDim(reshaped_inputs, dim);
+}
+
 xla::XlaOp build_batch_norm(
     const Node* node,
     const xla::XlaOp& input,
@@ -612,6 +661,19 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         xla::XlaOp xla_output = build_expand(node, *XLA_OP(0), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::stack: {
+        CHECK_EQ(node->inputs().size(), 2);
+        const auto xla_output_maybe =
+            build_stack(node, node_xla_ops, undefined_inputs, &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
         break;
       }
