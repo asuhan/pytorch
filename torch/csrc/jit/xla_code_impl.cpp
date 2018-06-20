@@ -384,8 +384,10 @@ xla::XlaOp build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
+  const auto& node_inputs = node->inputs();
+  const auto eps = float_attr(node, node_inputs[7]->unique());
   return b->GetTupleElement(
-      b->BatchNormTraining(input, weight, bias, 1e-05, 0), 0);
+      b->BatchNormTraining(input, weight, bias, eps, 0), 0);
 }
 
 const xla::XlaOp& xla_op_for_input(
