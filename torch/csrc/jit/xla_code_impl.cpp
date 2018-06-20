@@ -401,6 +401,25 @@ xla::XlaOp build_expand(
   return b->Reshape(broadcast, reshape_permutation, xla_i64_list(output_sizes));
 }
 
+xla::XlaOp build_stack(
+    const Node* node,
+    const std::vector<xla::XlaOp>& inputs,
+    xla::XlaBuilder* b) {
+  const auto dim_sym = Symbol::attr("dim");
+  CHECK(node->hasAttribute(dim_sym));
+  const auto dim = node->i(dim_sym);
+  std::vector<xla::XlaOp> reshaped_inputs;
+  const auto& node_inputs = node->inputs();
+  CHECK_EQ(inputs.size(), node_inputs.size());
+  // Reshape inputs along the dim axis.
+  for (size_t i = 0; i < node_inputs.size(); ++i) {
+    auto reshaped_input_size = xla_i64_list(tensor_sizes(node_inputs[i]));
+    reshaped_input_size.insert(reshaped_input_size.begin() + dim, 1);
+    reshaped_inputs.push_back(b->Reshape(inputs[i], reshaped_input_size));
+  }
+  return b->ConcatInDim(reshaped_inputs, dim);
+}
+
 xla::XlaOp build_batch_norm(
     const Node* node,
     const xla::XlaOp& input,
@@ -567,6 +586,22 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::expand: {
         CHECK_EQ(node->inputs().size(), 1);
         xla::XlaOp xla_output = build_expand(node, *XLA_OP(0), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::stack: {
+        CHECK_GE(node->inputs().size(), 1);
+        std::vector<xla::XlaOp> xla_ops;
+        for (size_t i = 0; i < node->inputs().size(); ++i) {
+          const auto xla_op = XLA_OP(i);
+          if (!xla_op.has_value()) {
+            return at::nullopt;
+          }
+          xla_ops.push_back(*xla_op);
+        }
+        xla::XlaOp xla_output = build_stack(node, xla_ops, &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
