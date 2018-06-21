@@ -233,6 +233,33 @@ class TestBatchNorm(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+class TestMNIST(TestCase):
+    def test(self):
+
+        class XlaMNIST(nn.Module):
+            def __init__(self):
+                super(XlaMNIST, self).__init__()
+                self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+                self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+                self.fc1 = nn.Linear(320, 50)
+                self.fc2 = nn.Linear(50, 10)
+
+            def forward(self, x):
+                x = F.relu(F.max_pool2d(self.conv1(x), 2))
+                x = F.relu(F.max_pool2d(self.conv2(x), 2))
+                x = x.view(-1, 320)
+                x = F.relu(self.fc1(x))
+                x = self.fc2(x)
+                return F.log_softmax(x, dim=1)
+
+        batch_size = 32
+        x = torch.randn(batch_size, 1, 28, 28)
+        model = XlaMNIST()
+        out = _xla_run(model, x)
+        expected = model(x)
+        self.assertEqual(out.data, expected.data)
+
+
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
     run_tests()
