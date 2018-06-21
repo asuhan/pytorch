@@ -364,30 +364,31 @@ at::optional<xla::XlaOp> build_log_softmax(
   const auto dim_sym = Symbol::attr("dim");
   CHECK(node->hasAttribute(dim_sym));
 
-  int64_t dim = node->i(dim_sym);
-  if (dim != 0 && dim != 1) {
-    LOG(INFO) << "log_softmax not supported for dim=" << node->i(dim_sym);
-    return at::nullopt;
-  }
+  int64 dim = node->i(dim_sym);
 
-  int batch_dim = 0;
-  int class_dim = 1;
+  const auto& node_inputs = node->inputs();
+  auto input_size = tensor_sizes(node_inputs[0]);
 
-  if (dim == 0) {
-    std::swap(batch_dim, class_dim);
+  std::vector<int64> broadcast_dimensions;
+  for (int64 broadcast_dim = 0; broadcast_dim < input_size.size();
+       ++broadcast_dim) {
+    if (broadcast_dim == dim) {
+      continue;
+    }
+    broadcast_dimensions.push_back(broadcast_dim);
   }
 
   const auto max_func = CreateMaxComputation();
   const auto min_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
   const auto logits_max =
-      b->Reduce(logits, b->ConstantLiteral(min_value), max_func, {class_dim});
-  const auto shifted_logits = b->Sub(logits, logits_max, {batch_dim});
+      b->Reduce(logits, b->ConstantLiteral(min_value), max_func, {dim});
+  const auto shifted_logits = b->Sub(logits, logits_max, broadcast_dimensions);
   const auto exp_shifted = b->Exp(shifted_logits);
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
   const auto reduce =
-      b->Reduce(exp_shifted, xla_zero, CreateAddComputation(), {class_dim});
-  return b->Sub(shifted_logits, b->Log(reduce), {batch_dim});
+      b->Reduce(exp_shifted, xla_zero, CreateAddComputation(), {dim});
+  return b->Sub(shifted_logits, b->Log(reduce), broadcast_dimensions);
 }
 
 double one_elem_tensor_value(const at::Tensor& t) {
