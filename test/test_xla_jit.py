@@ -144,13 +144,13 @@ class TestConv(TestCase):
         class XlaConv(nn.Module):
             def __init__(self, bias):
                 super(XlaConv, self).__init__()
-                self.conv = nn.Conv2d(1, 1, 3, bias=bias)
+                self.conv = nn.Conv2d(10, 100, 5, bias=bias)
 
             def forward(self, x):
                 return self.conv(x)
 
         for bias in [True, False]:
-            x = torch.randn(1, 1, 3, 5)
+            x = torch.randn(16, 10, 28, 28)
             model = XlaConv(bias)
             out = _xla_run(model, x)
             expected = model(x)

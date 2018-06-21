@@ -241,13 +241,18 @@ xla::XlaOp build_convolution_bias(
   CHECK_GE(node_inputs.size(), size_t(4));
   const auto window_strides =
       xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
+  const auto bias_size = tensor_sizes(node_inputs[2]);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
-  const auto bias_size = xla_i64_list(tensor_sizes(node_outputs[0]));
-  const auto bias_scalar = b->Reshape(bias, {});
+  auto broadcast_sizes = xla_i64_list(tensor_sizes(node_outputs[0]));
+  CHECK_EQ(broadcast_sizes.size(), 4);
+  // Remove the channels dimension.
+  broadcast_sizes.erase(broadcast_sizes.begin() + 1);
+  // Make the bias match the output dimensions.
+  const auto bias_broadcast =
+      b->Transpose(b->Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
   return b->Add(
-      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid),
-      b->Broadcast(bias_scalar, bias_size));
+      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias_broadcast);
 }
 
 xla::XlaOp build_addmm(
