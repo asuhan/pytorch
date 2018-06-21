@@ -186,16 +186,25 @@ Symbol make_attr(const std::string& name, const Node* node) {
 
 #define ATTR(name) make_attr(name, node)
 
+std::vector<std::pair<int64, int64>> make_conv_padding(const Node* node) {
+  std::vector<std::pair<int64, int64>> dims_padding;
+  const auto padding = node->is(ATTR("padding"));
+  for (const auto dim_padding : padding) {
+    dims_padding.emplace_back(dim_padding, dim_padding);
+  }
+  return dims_padding;
+}
+
 xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
     xla::XlaBuilder* b) {
-  const auto stride_sym = ATTR("stride");
-  const auto window_strides = xla_i64_list(node->is(stride_sym));
+  const auto window_strides = xla_i64_list(node->is(ATTR("stride")));
+  const auto dims_padding = make_conv_padding(node);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
-  return b->Conv(lhs, rhs, window_strides, xla::Padding::kValid);
+  return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
 }
 
 xla::XlaOp build_convolution_bias(
@@ -204,8 +213,6 @@ xla::XlaOp build_convolution_bias(
     const xla::XlaOp& rhs,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto stride_sym = ATTR("stride");
-  const auto window_strides = xla_i64_list(node->is(stride_sym));
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), 3);
   const auto bias_size = tensor_sizes(node_inputs[2]);
@@ -218,8 +225,8 @@ xla::XlaOp build_convolution_bias(
   // Make the bias match the output dimensions.
   const auto bias_broadcast =
       b->Transpose(b->Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
-  return b->Add(
-      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias_broadcast);
+  const auto conv = build_convolution(node, lhs, rhs, b);
+  return b->Add(conv, bias_broadcast);
 }
 
 xla::XlaOp build_addmm(
