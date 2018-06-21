@@ -377,20 +377,19 @@ at::optional<xla::XlaOp> build_avg_pool2d(
     return b->Div(sum, count);
   } else {
     auto input_size = xla_i64_list(tensor_sizes(node_inputs[0]));
-    CHECK_EQ(input_size.size(), 4);
-    input_size[2] += padding[0];
-    input_size[3] += padding[1];
     // Build a matrix of all 1s, with the same width/height as the input.
     const auto one_literal = xla::Literal::CreateR0<float>(1);
     const auto ones =
         b->Broadcast(b->ConstantLiteral(*one_literal), input_size);
+    // Pad it like the sum matrix.
+    const auto padded_ones = b->Pad(ones, xla_zero, padding_config);
     const auto counts = b->ReduceWindow(
-        ones,
+        padded_ones,
         xla_zero,
         CreateAddComputation(),
         window_dimensions,
         window_strides,
-        xla::Padding::kSame);
+        xla::Padding::kValid);
     return b->Div(sum, counts);
   }
 }
