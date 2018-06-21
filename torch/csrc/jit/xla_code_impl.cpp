@@ -178,7 +178,7 @@ int64_t int_attr(const Node* parent, const size_t id) {
     if (node->kind() != prim::Constant) {
       continue;
     }
-    const auto& node_outputs = node->outputs();
+    const auto node_outputs = node->outputs();
     CHECK_EQ(node_outputs.size(), size_t(1));
     const auto output = node_outputs[0];
     if (output->unique() == id) {
@@ -196,13 +196,13 @@ std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
     if (node->kind() != prim::ListConstruct) {
       continue;
     }
-    const auto& node_outputs = node->outputs();
+    const auto node_outputs = node->outputs();
     CHECK_EQ(node_outputs.size(), size_t(1));
     const auto output = node_outputs[0];
     if (output->unique() != id) {
       continue;
     }
-    const auto& node_inputs = node->inputs();
+    const auto node_inputs = node->inputs();
     for (const auto input : node_inputs) {
       result.push_back(int_attr(node, input->unique()));
     }
@@ -218,7 +218,7 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
 }
 
 std::vector<std::pair<int64, int64>> make_conv_padding(const Node* node) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(5));
   std::vector<std::pair<int64, int64>> dims_padding;
   const auto padding = int_list_attr(node, node_inputs[4]->unique());
@@ -233,7 +233,7 @@ xla::XlaOp build_convolution(
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(4));
   const auto window_strides =
       xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
@@ -247,7 +247,7 @@ xla::XlaOp build_convolution_bias(
     const xla::XlaOp& rhs,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(4));
   const auto window_strides =
       xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
@@ -271,7 +271,7 @@ xla::XlaOp build_addmm(
     const xla::XlaOp& weights,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto bias_size = tensor_sizes(node_inputs[0]);
   CHECK_EQ(bias_size.size(), 1);
   std::vector<int64> reshaped_bias_sizes;
@@ -297,7 +297,7 @@ xla::XlaOp build_max_pool2d(
     xla::XlaBuilder* b) {
   const auto max_computation = CreateMaxComputation();
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(2));
   const auto kernel_size =
       xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
@@ -316,7 +316,7 @@ xla::XlaOp build_max_pool2d(
 }
 
 bool avg_pool2d_supported(const Node* node) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(6));
   const auto ceil_mode = int_attr(node, node_inputs[4]->unique());
   if (ceil_mode) {
@@ -344,7 +344,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   if (!avg_pool2d_supported(node)) {
     return at::nullopt;
   }
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(6));
   const auto kernel_size =
       xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
@@ -414,7 +414,7 @@ at::optional<xla::XlaOp> build_log_softmax(
     const xla::XlaOp& logits,
     xla::XlaBuilder* b) {
   // Inspired from tf2xla.
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), size_t(2));
   int64_t dim = int_attr(node, node_inputs[1]->unique());
 
@@ -448,7 +448,7 @@ float float_attr(const Node* parent, const size_t id) {
     if (node->kind() != prim::Constant) {
       continue;
     }
-    const auto& node_outputs = node->outputs();
+    const auto node_outputs = node->outputs();
     CHECK_EQ(node_outputs.size(), size_t(1));
     const auto output = node_outputs[0];
     if (output->unique() == id) {
@@ -469,7 +469,7 @@ xla::XlaOp build_threshold(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto threshold_literal =
       xla::Literal::CreateR0<float>(float_attr(node, node_inputs[1]->unique()));
   const auto threshold = b->ConstantLiteral(*threshold_literal);
@@ -551,13 +551,13 @@ std::vector<const Value*> input_list_attr(const Node* parent, const size_t id) {
     if (node->kind() != prim::ListConstruct) {
       continue;
     }
-    const auto& node_outputs = node->outputs();
+    const auto node_outputs = node->outputs();
     CHECK_EQ(node_outputs.size(), size_t(1));
     const auto output = node_outputs[0];
     if (output->unique() != id) {
       continue;
     }
-    const auto& node_inputs = node->inputs();
+    const auto node_inputs = node->inputs();
     for (const auto input : node_inputs) {
       result.push_back(input);
     }
@@ -571,7 +571,7 @@ at::optional<xla::XlaOp> build_stack(
     const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
     const std::unordered_set<size_t>& undefined_inputs,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), size_t(2));
   const auto stack_inputs = input_list_attr(node, node_inputs[0]->unique());
   const auto dim = int_attr(node, node_inputs[1]->unique());
@@ -599,7 +599,7 @@ xla::XlaOp build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto eps = float_attr(node, node_inputs[7]->unique());
   return b->GetTupleElement(
       b->BatchNormTraining(input, weight, bias, eps, 0), 0);
@@ -610,7 +610,7 @@ at::optional<const xla::XlaOp&> xla_op_for_input(
     const size_t input_index,
     const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
     const std::unordered_set<size_t> undefined_inputs) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto input = node_inputs.at(input_index);
 
   // check if is prim::Undefined
@@ -626,7 +626,7 @@ at::optional<const xla::XlaOp&> xla_op_for_input(
 }
 
 size_t output_id(const Node* node) {
-  const auto& node_outputs = node->outputs();
+  const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
   return node_outputs[0]->unique();
 }
