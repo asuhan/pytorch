@@ -206,13 +206,20 @@ xla::XlaOp build_convolution_bias(
     xla::XlaBuilder* b) {
   const auto stride_sym = ATTR("stride");
   const auto window_strides = xla_i64_list(node->is(stride_sym));
+  const auto node_inputs = node->inputs();
+  CHECK_EQ(node_inputs.size(), 3);
+  const auto bias_size = tensor_sizes(node_inputs[2]);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
-  const auto bias_size = xla_i64_list(tensor_sizes(node_outputs[0]));
-  const auto bias_scalar = b->Reshape(bias, {});
+  auto broadcast_sizes = xla_i64_list(tensor_sizes(node_outputs[0]));
+  CHECK_EQ(broadcast_sizes.size(), 4);
+  // Remove the channels dimension.
+  broadcast_sizes.erase(broadcast_sizes.begin() + 1);
+  // Make the bias match the output dimensions.
+  const auto bias_broadcast =
+      b->Transpose(b->Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
   return b->Add(
-      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid),
-      b->Broadcast(bias_scalar, bias_size));
+      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias_broadcast);
 }
 
 xla::XlaOp build_addmm(
