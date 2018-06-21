@@ -205,8 +205,8 @@ class TestLogSoftmax(TestCase):
             def forward(self, x):
                 return F.log_softmax(x, self.dim)
 
-        x = torch.rand(4, 2)
-        for dim in [0, 1]:
+        x = torch.rand(5, 3, 4, 2)
+        for dim in xrange(0, x.dim()):
             model = XlaLogSoftmax(dim)
             out = _xla_run(model, x)
             expected = model(x)
