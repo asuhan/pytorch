@@ -235,7 +235,7 @@ xla::XlaOp build_addmm(
     const xla::XlaOp& weights,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto bias_size = tensor_sizes(node_inputs[0]);
   CHECK_EQ(bias_size.size(), 1);
   std::vector<int64> reshaped_bias_sizes;
@@ -261,10 +261,9 @@ xla::XlaOp build_max_pool2d(
     xla::XlaBuilder* b) {
   const auto max_computation = CreateMaxComputation();
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
-  const auto kernel_size_sym = ATTR("kernel_size");
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
-  const auto kernel_size = xla_i64_list(node->is(kernel_size_sym));
+  const auto kernel_size = xla_i64_list(node->is(ATTR("kernel_size")));
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   const auto window_strides = window_dimensions;
@@ -304,8 +303,8 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   if (!avg_pool2d_supported(node)) {
     return at::nullopt;
   }
-  const auto& kernel_size = xla_i64_list(node->is(ATTR("kernel_size")));
-  const auto& stride = xla_i64_list(node->is(ATTR("stride")));
+  const auto kernel_size = xla_i64_list(node->is(ATTR("kernel_size")));
+  const auto stride = xla_i64_list(node->is(ATTR("stride")));
   const auto add_computation = CreateAddComputation();
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   std::vector<int64> window_dimensions;
@@ -346,7 +345,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
     const auto count = b->ConstantLiteral(*count_literal);
     return b->Div(sum, count);
   } else {
-    const auto& node_inputs = node->inputs();
+    const auto node_inputs = node->inputs();
     auto input_size = xla_i64_list(tensor_sizes(node_inputs[0]));
     // Build a matrix of all 1s, with the same width/height as the input.
     const auto one_literal = xla::Literal::CreateR0<float>(1);
@@ -370,10 +369,9 @@ at::optional<xla::XlaOp> build_log_softmax(
     const xla::XlaOp& logits,
     xla::XlaBuilder* b) {
   // Inspired from tf2xla.
-  const auto dim_sym = ATTR("dim");
-  int64 dim = node->i(dim_sym);
+  int64 dim = node->i(ATTR("dim"));
 
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   auto input_size = tensor_sizes(node_inputs[0]);
 
   std::vector<int64> broadcast_dimensions;
@@ -413,19 +411,17 @@ xla::XlaOp build_threshold(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto threshold_sym = ATTR("threshold");
-  const auto& threshold_tensor = node->t(threshold_sym);
+  const auto& threshold_tensor = node->t(ATTR("threshold"));
   CHECK_EQ(threshold_tensor.ndimension(), 0);
   const auto threshold_literal =
       xla::Literal::CreateR0<float>(one_elem_tensor_value(threshold_tensor));
   const auto threshold = b->ConstantLiteral(*threshold_literal);
-  const auto value_sym = ATTR("value");
-  const auto& value_tensor = node->t(value_sym);
+  const auto& value_tensor = node->t(ATTR("value"));
   CHECK_EQ(value_tensor.ndimension(), 0);
   const auto value_literal =
       xla::Literal::CreateR0<float>(one_elem_tensor_value(value_tensor));
   const auto value = b->ConstantLiteral(*value_literal);
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto input_sizes = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
   std::copy(input_sizes.begin(), input_sizes.end(), broadcast_sizes.begin());
@@ -499,10 +495,9 @@ xla::XlaOp build_stack(
     const Node* node,
     const std::vector<xla::XlaOp>& inputs,
     xla::XlaBuilder* b) {
-  const auto dim_sym = ATTR("dim");
-  const auto dim = node->i(dim_sym);
+  const auto dim = node->i(ATTR("dim"));
   std::vector<xla::XlaOp> reshaped_inputs;
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   CHECK_EQ(inputs.size(), node_inputs.size());
   // Reshape inputs along the dim axis.
   for (size_t i = 0; i < node_inputs.size(); ++i) {
@@ -519,8 +514,7 @@ xla::XlaOp build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto eps_sym = ATTR("eps");
-  const auto eps = node->f(eps_sym);
+  const auto eps = node->f(ATTR("eps"));
   return b->GetTupleElement(
       b->BatchNormTraining(input, weight, bias, eps, 0), 0);
 }
@@ -532,7 +526,7 @@ at::optional<const xla::XlaOp&> xla_op_for_input(
     const size_t input_index,
     const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
     const std::unordered_set<size_t> undefined_inputs) {
-  const auto& node_inputs = node->inputs();
+  const auto node_inputs = node->inputs();
   const auto input = node_inputs.at(input_index);
 
   // check if is prim::Undefined
@@ -548,7 +542,7 @@ at::optional<const xla::XlaOp&> xla_op_for_input(
 }
 
 size_t output_id(const Node* node) {
-  const auto& node_outputs = node->outputs();
+  const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
   return node_outputs[0]->unique();
 }
