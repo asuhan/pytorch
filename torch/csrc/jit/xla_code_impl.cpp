@@ -178,13 +178,20 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
   return tensor_type->sizes();
 }
 
+Symbol make_attr(const std::string& name, const Node* node) {
+  const auto sym = Symbol::attr(name);
+  CHECK(node->hasAttribute(sym));
+  return sym;
+}
+
+#define ATTR(name) make_attr(name, node)
+
 xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
     xla::XlaBuilder* b) {
-  const auto stride_sym = Symbol::attr("stride");
-  CHECK(node->hasAttribute(stride_sym));
+  const auto stride_sym = ATTR("stride");
   const auto window_strides = xla_i64_list(node->is(stride_sym));
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
@@ -197,8 +204,7 @@ xla::XlaOp build_convolution_bias(
     const xla::XlaOp& rhs,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto stride_sym = Symbol::attr("stride");
-  CHECK(node->hasAttribute(stride_sym));
+  const auto stride_sym = ATTR("stride");
   const auto window_strides = xla_i64_list(node->is(stride_sym));
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
@@ -241,8 +247,7 @@ xla::XlaOp build_max_pool2d(
     xla::XlaBuilder* b) {
   const auto max_computation = CreateMaxComputation();
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
-  const auto kernel_size_sym = Symbol::attr("kernel_size");
-  CHECK(node->hasAttribute(kernel_size_sym));
+  const auto kernel_size_sym = ATTR("kernel_size");
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
   const auto kernel_size = xla_i64_list(node->is(kernel_size_sym));
@@ -257,14 +262,6 @@ xla::XlaOp build_max_pool2d(
       window_strides,
       xla::Padding::kValid);
 }
-
-Symbol make_attr(const std::string& name, const Node* node) {
-  const auto sym = Symbol::attr(name);
-  CHECK(node->hasAttribute(sym));
-  return sym;
-}
-
-#define ATTR(name) make_attr(name, node)
 
 bool avg_pool2d_supported(const Node* node) {
   const auto ceil_mode = node->i(ATTR("ceil_mode"));
@@ -354,16 +351,12 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   }
 }
 
-#undef ATTR
-
 at::optional<xla::XlaOp> build_log_softmax(
     const Node* node,
     const xla::XlaOp& logits,
     xla::XlaBuilder* b) {
   // Inspired from tf2xla.
-  const auto dim_sym = Symbol::attr("dim");
-  CHECK(node->hasAttribute(dim_sym));
-
+  const auto dim_sym = ATTR("dim");
   int64 dim = node->i(dim_sym);
 
   const auto& node_inputs = node->inputs();
@@ -406,15 +399,13 @@ xla::XlaOp build_threshold(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto threshold_sym = Symbol::attr("threshold");
-  CHECK(node->hasAttribute(threshold_sym));
+  const auto threshold_sym = ATTR("threshold");
   const auto& threshold_tensor = node->t(threshold_sym);
   CHECK_EQ(threshold_tensor.ndimension(), 0);
   const auto threshold_literal =
       xla::Literal::CreateR0<float>(one_elem_tensor_value(threshold_tensor));
   const auto threshold = b->ConstantLiteral(*threshold_literal);
-  const auto value_sym = Symbol::attr("value");
-  CHECK(node->hasAttribute(value_sym));
+  const auto value_sym = ATTR("value");
   const auto& value_tensor = node->t(value_sym);
   CHECK_EQ(value_tensor.ndimension(), 0);
   const auto value_literal =
@@ -494,8 +485,7 @@ xla::XlaOp build_stack(
     const Node* node,
     const std::vector<xla::XlaOp>& inputs,
     xla::XlaBuilder* b) {
-  const auto dim_sym = Symbol::attr("dim");
-  CHECK(node->hasAttribute(dim_sym));
+  const auto dim_sym = ATTR("dim");
   const auto dim = node->i(dim_sym);
   std::vector<xla::XlaOp> reshaped_inputs;
   const auto& node_inputs = node->inputs();
@@ -515,12 +505,13 @@ xla::XlaOp build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto eps_sym = Symbol::attr("eps");
-  CHECK(node->hasAttribute(eps_sym));
+  const auto eps_sym = ATTR("eps");
   const auto eps = node->f(eps_sym);
   return b->GetTupleElement(
       b->BatchNormTraining(input, weight, bias, eps, 0), 0);
 }
+
+#undef ATTR
 
 at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
