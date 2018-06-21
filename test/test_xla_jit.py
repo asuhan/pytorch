@@ -149,7 +149,7 @@ class TestConv(TestCase):
             def forward(self, x):
                 return self.conv(x)
 
-        x = torch.randn(16, 10, 28, 28)
+        x = torch.randn(32, 10, 28, 28)
         model = XlaConv()
         out = _xla_run(model, x)
         expected = model(x)
