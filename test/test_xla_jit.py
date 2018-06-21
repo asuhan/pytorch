@@ -187,7 +187,7 @@ class TestAvgPool(TestCase):
         for stride in [1, 2]:
             for padding in [0, 1]:
                 for count_include_pad in [False, True]:
-                    model = XlaAvgPool(stride, padding, True)
+                    model = XlaAvgPool(stride, padding, count_include_pad)
                     out = _xla_run(model, x)
                     expected = model(x)
                     self.assertEqual(out.data, expected.data)
