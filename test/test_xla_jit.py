@@ -150,7 +150,7 @@ class TestConv(TestCase):
                 return self.conv(x)
 
         for bias in [True, False]:
-            x = torch.randn(16, 10, 28, 28)
+            x = torch.randn(32, 10, 28, 28)
             model = XlaConv(bias)
             out = _xla_run(model, x)
             expected = model(x)
