@@ -142,19 +142,22 @@ class TestConv(TestCase):
     def test(self):
 
         class XlaConv(nn.Module):
-            def __init__(self, bias):
+            def __init__(self, stride, padding, bias):
                 super(XlaConv, self).__init__()
-                self.conv = nn.Conv2d(10, 100, 5, bias=bias)
+                self.conv = nn.Conv2d(10, 100, 5, stride=stride,
+                    padding=padding, bias=bias)
 
             def forward(self, x):
                 return self.conv(x)
 
-        for bias in [True, False]:
-            x = torch.randn(32, 10, 28, 28)
-            model = XlaConv(bias)
-            out = _xla_run(model, x)
-            expected = model(x)
-            self.assertEqual(out.data, expected.data)
+        for stride in xrange(1, 4):
+            for padding in xrange(0, 3):
+                for bias in [True, False]:
+                    x = torch.randn(32, 10, 28, 28)
+                    model = XlaConv(stride, padding, bias)
+                    out = _xla_run(model, x)
+                    expected = model(x)
+                    self.assertEqual(out.data, expected.data)
 
 
 class TestMaxPool(TestCase):

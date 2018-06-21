@@ -217,6 +217,17 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
   return tensor_type->sizes();
 }
 
+std::vector<std::pair<int64, int64>> make_conv_padding(const Node* node) {
+  const auto& node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), size_t(5));
+  std::vector<std::pair<int64, int64>> dims_padding;
+  const auto padding = int_list_attr(node, node_inputs[4]->unique());
+  for (const auto dim_padding : padding) {
+    dims_padding.emplace_back(dim_padding, dim_padding);
+  }
+  return dims_padding;
+}
+
 xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
@@ -226,9 +237,8 @@ xla::XlaOp build_convolution(
   CHECK_GE(node_inputs.size(), size_t(4));
   const auto window_strides =
       xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
-  const auto node_outputs = node->outputs();
-  CHECK_EQ(node_outputs.size(), 1);
-  return b->Conv(lhs, rhs, window_strides, xla::Padding::kValid);
+  const auto dims_padding = make_conv_padding(node);
+  return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
 }
 
 xla::XlaOp build_convolution_bias(
@@ -251,8 +261,8 @@ xla::XlaOp build_convolution_bias(
   // Make the bias match the output dimensions.
   const auto bias_broadcast =
       b->Transpose(b->Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
-  return b->Add(
-      b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias_broadcast);
+  const auto conv = build_convolution(node, lhs, rhs, b);
+  return b->Add(conv, bias_broadcast);
 }
 
 xla::XlaOp build_addmm(
