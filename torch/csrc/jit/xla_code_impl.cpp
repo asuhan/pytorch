@@ -508,7 +508,7 @@ xla::XlaOp build_batch_norm(
     xla::XlaBuilder* b) {
   const auto eps = node->f(attr::eps);
   return b->GetTupleElement(
-      b->BatchNormTraining(input, weight, bias, eps, 0), 0);
+      b->BatchNormTraining(input, weight, bias, eps, 1), 0);
 }
 
 at::optional<const xla::XlaOp&> xla_op_for_input(
