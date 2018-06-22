@@ -107,11 +107,11 @@ XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
 at::optional<at::Tensor> XlaCodeImpl::run(
     const std::vector<at::Tensor>& inputs) const {
   const auto parameter_shapes = captureInputShapes(inputs);
-  if (!parameter_shapes.has_value()) {
+  if (!parameter_shapes) {
     return at::nullopt;
   }
   auto compilation_result = buildXlaComputation(*parameter_shapes);
-  if (!compilation_result.has_value()) {
+  if (!compilation_result) {
     return at::nullopt;
   }
   const auto& computation = *compilation_result;
@@ -144,7 +144,7 @@ at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
   for (const auto& tensor : inputs) {
     const auto tensor_element_type =
         make_xla_primitive_type(tensor.type().scalarType());
-    if (!tensor_element_type.has_value()) {
+    if (!tensor_element_type) {
       return at::nullopt;
     }
     parameter_shapes.push_back(
@@ -594,7 +594,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         }
 
         xla::XlaOp xla_output;
-        if (XLA_OP(2).has_value()) { // bias exists
+        if (XLA_OP(2)) { // bias exists
           xla_output = build_convolution_bias(
               node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         } else {
@@ -696,7 +696,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         std::vector<xla::XlaOp> xla_ops;
         for (size_t i = 0; i < node->inputs().size(); ++i) {
           const auto xla_op = XLA_OP(i);
-          if (!xla_op.has_value()) {
+          if (!xla_op) {
             return at::nullopt;
           }
           xla_ops.push_back(*xla_op);
