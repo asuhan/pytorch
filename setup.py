@@ -792,6 +792,7 @@ main_sources = [
     "torch/csrc/jit/batched/BatchTensor.cpp",
     "torch/csrc/jit/init.cpp",
     "torch/csrc/jit/ivalue.cpp",
+    "torch/csrc/jit/passes/constant_folding.cpp",
     "torch/csrc/jit/passes/onnx.cpp",
     "torch/csrc/jit/passes/onnx/fixup_onnx_loop.cpp",
     "torch/csrc/jit/passes/onnx/peephole.cpp",

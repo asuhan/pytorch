@@ -1,6 +1,7 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/xla_code_impl.h"
 #include "tensorflow/compiler/xla/rpc/computation_client.h"
+#include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
 #include "torch/csrc/jit/passes/remove_expands.h"
 
@@ -101,6 +102,7 @@ namespace jit {
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
   RemoveExpands(graph_);
+  // ConstantFold(graph_);
   EliminateDeadCode(graph_);
 }
 
