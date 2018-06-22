@@ -223,14 +223,14 @@ class TestBatchNorm(TestCase):
             def __init__(self, training):
                 super(XlaBatchNorm, self).__init__()
                 if training:
-                    self.bn = nn.BatchNorm2d(1)
+                    self.bn = nn.BatchNorm2d(3)
                 else:
-                    self.bn = nn.BatchNorm2d(1, track_running_stats=False)
+                    self.bn = nn.BatchNorm2d(3, track_running_stats=False)
 
             def forward(self, x):
                 return self.bn(x)
 
-        x = torch.rand(1, 1, 5, 7)
+        x = torch.rand(14, 3, 5, 7)
         model = XlaBatchNorm(True)
         out = _xla_run(model, x)
         expected = model(x)
