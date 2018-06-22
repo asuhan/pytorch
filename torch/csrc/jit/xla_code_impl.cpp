@@ -178,17 +178,9 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
   return tensor_type->sizes();
 }
 
-Symbol make_attr(const std::string& name, const Node* node) {
-  const auto sym = Symbol::attr(name);
-  CHECK(node->hasAttribute(sym));
-  return sym;
-}
-
-#define ATTR(name) make_attr(name, node)
-
 std::vector<std::pair<int64, int64>> make_conv_padding(const Node* node) {
   std::vector<std::pair<int64, int64>> dims_padding;
-  const auto padding = node->is(ATTR("padding"));
+  const auto padding = node->is(attr::padding);
   for (const auto dim_padding : padding) {
     dims_padding.emplace_back(dim_padding, dim_padding);
   }
@@ -200,7 +192,7 @@ xla::XlaOp build_convolution(
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
     xla::XlaBuilder* b) {
-  const auto window_strides = xla_i64_list(node->is(ATTR("stride")));
+  const auto window_strides = xla_i64_list(node->is(attr::stride));
   const auto dims_padding = make_conv_padding(node);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
@@ -263,7 +255,7 @@ xla::XlaOp build_max_pool2d(
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
-  const auto kernel_size = xla_i64_list(node->is(ATTR("kernel_size")));
+  const auto kernel_size = xla_i64_list(node->is(attr::kernel_size));
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   const auto window_strides = window_dimensions;
@@ -277,7 +269,7 @@ xla::XlaOp build_max_pool2d(
 }
 
 bool avg_pool2d_supported(const Node* node) {
-  const auto ceil_mode = node->i(ATTR("ceil_mode"));
+  const auto ceil_mode = node->i(attr::ceil_mode);
   if (ceil_mode) {
     LOG(INFO) << "ceil_mode not supported for avg_pool2d yet";
     return false;
@@ -303,8 +295,8 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   if (!avg_pool2d_supported(node)) {
     return at::nullopt;
   }
-  const auto kernel_size = xla_i64_list(node->is(ATTR("kernel_size")));
-  const auto stride = xla_i64_list(node->is(ATTR("stride")));
+  const auto kernel_size = xla_i64_list(node->is(attr::kernel_size));
+  const auto stride = xla_i64_list(node->is(attr::stride));
   const auto add_computation = CreateAddComputation();
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   std::vector<int64> window_dimensions;
@@ -314,7 +306,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   std::vector<int64> window_strides;
   window_strides.resize(2, 1);
   window_strides.insert(window_strides.end(), stride.begin(), stride.end());
-  const auto& padding = node->is(ATTR("padding"));
+  const auto& padding = node->is(attr::padding);
   CHECK_EQ(padding.size(), 2);
   xla::PaddingConfig padding_config;
   for (int i = 0; i < 2; ++i) {
@@ -334,7 +326,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
       window_dimensions,
       window_strides,
       xla::Padding::kValid);
-  const auto count_include_pad = node->i(ATTR("count_include_pad"));
+  const auto count_include_pad = node->i(attr::count_include_pad);
   if (count_include_pad) {
     const auto kernel_elements = std::accumulate(
         kernel_size.begin(),
@@ -369,7 +361,7 @@ at::optional<xla::XlaOp> build_log_softmax(
     const xla::XlaOp& logits,
     xla::XlaBuilder* b) {
   // Inspired from tf2xla.
-  int64 dim = node->i(ATTR("dim"));
+  int64 dim = node->i(attr::dim);
 
   const auto node_inputs = node->inputs();
   auto input_size = tensor_sizes(node_inputs[0]);
@@ -411,12 +403,12 @@ xla::XlaOp build_threshold(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto& threshold_tensor = node->t(ATTR("threshold"));
+  const auto& threshold_tensor = node->t(attr::threshold);
   CHECK_EQ(threshold_tensor.ndimension(), 0);
   const auto threshold_literal =
       xla::Literal::CreateR0<float>(one_elem_tensor_value(threshold_tensor));
   const auto threshold = b->ConstantLiteral(*threshold_literal);
-  const auto& value_tensor = node->t(ATTR("value"));
+  const auto& value_tensor = node->t(attr::value);
   CHECK_EQ(value_tensor.ndimension(), 0);
   const auto value_literal =
       xla::Literal::CreateR0<float>(one_elem_tensor_value(value_tensor));
@@ -495,7 +487,7 @@ xla::XlaOp build_stack(
     const Node* node,
     const std::vector<xla::XlaOp>& inputs,
     xla::XlaBuilder* b) {
-  const auto dim = node->i(ATTR("dim"));
+  const auto dim = node->i(attr::dim);
   std::vector<xla::XlaOp> reshaped_inputs;
   const auto node_inputs = node->inputs();
   CHECK_EQ(inputs.size(), node_inputs.size());
@@ -514,12 +506,10 @@ xla::XlaOp build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto eps = node->f(ATTR("eps"));
+  const auto eps = node->f(attr::eps);
   return b->GetTupleElement(
       b->BatchNormTraining(input, weight, bias, eps, 0), 0);
 }
-
-#undef ATTR
 
 at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
