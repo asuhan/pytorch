@@ -631,6 +631,28 @@ size_t output_id(const Node* node) {
   return node_outputs[0]->unique();
 }
 
+bool graph_is_supported(const Graph* graph) {
+  const auto nodes = graph->block()->nodes();
+  // Index output of max_pool2d must not be used, not implemented yet.
+  std::unordered_set<size_t> must_be_unused;
+  for (const auto node : nodes) {
+    if (node->kind() == aten::max_pool2d) {
+      const auto node_outputs = node->outputs();
+      must_be_unused.emplace(node_outputs[1]->unique());
+    }
+  }
+  for (const auto node : nodes) {
+    for (const auto input : node->inputs()) {
+      const auto it = must_be_unused.find(input->unique());
+      if (it != must_be_unused.end()) {
+        LOG(INFO) << "Graph not supported; index output of max_pool2d is used.";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 #define XLA_OP(input_index) \
@@ -638,6 +660,10 @@ size_t output_id(const Node* node) {
 
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
+  if (!graph_is_supported(graph_.get())) {
+    return at::nullopt;
+  }
+
   xla::XlaBuilder b("xla_computation");
   std::unordered_map<size_t, xla::XlaOp> node_xla_ops;
   std::unordered_set<size_t> undefined_inputs;
