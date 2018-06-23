@@ -178,7 +178,7 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
   return tensor_type->sizes();
 }
 
-std::vector<std::pair<int64, int64>> make_conv_padding(const Node* node) {
+std::vector<std::pair<int64, int64>> make_padding(const Node* node) {
   std::vector<std::pair<int64, int64>> dims_padding;
   const auto padding = node->is(attr::padding);
   for (const auto dim_padding : padding) {
@@ -193,7 +193,7 @@ xla::XlaOp build_convolution(
     const xla::XlaOp& rhs,
     xla::XlaBuilder* b) {
   const auto window_strides = xla_i64_list(node->is(attr::stride));
-  const auto dims_padding = make_conv_padding(node);
+  const auto dims_padding = make_padding(node);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
   return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
@@ -258,14 +258,28 @@ xla::XlaOp build_max_pool2d(
   const auto kernel_size = xla_i64_list(node->is(attr::kernel_size));
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
-  const auto window_strides = window_dimensions;
-  return b->ReduceWindow(
+  std::vector<int64> window_strides;
+  const auto stride = node->is(attr::stride);
+  if (stride.empty()) {
+    window_strides = window_dimensions;
+  } else {
+    window_strides.resize(2, 1);
+    const auto stride_attr = xla_i64_list(stride);
+    window_strides.insert(
+        window_strides.end(), stride_attr.begin(), stride_attr.end());
+  }
+  const auto spatial_padding = make_padding(node);
+  std::vector<std::pair<int64, int64>> window_padding;
+  window_padding.resize(2);
+  window_padding.insert(
+      window_padding.end(), spatial_padding.begin(), spatial_padding.end());
+  return b->ReduceWindowWithGeneralPadding(
       input,
       b->ConstantLiteral(init_value),
       max_computation,
       window_dimensions,
       window_strides,
-      xla::Padding::kValid);
+      window_padding);
 }
 
 bool avg_pool2d_supported(const Node* node) {

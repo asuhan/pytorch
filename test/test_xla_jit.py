@@ -163,14 +163,22 @@ class TestMaxPool(TestCase):
     def test(self):
 
         class XlaMaxPool(nn.Module):
-            def forward(self, x):
-                return F.max_pool2d(x, 2)
+            def __init__(self, stride, padding):
+                super(XlaMaxPool, self).__init__()
+                self.stride = stride
+                self.padding = padding
 
-        x = torch.rand(2, 1, 4, 6)
-        model = XlaMaxPool()
-        out = _xla_run(model, x)
-        expected = model(x)
-        self.assertEqual(out.data, expected.data)
+            def forward(self, x):
+                return F.max_pool2d(x, 3, stride=self.stride,
+                    padding=self.padding)
+
+        x = torch.rand(1, 64, 112, 112)
+        for stride in [None, 2]:
+            for padding in [0, 1]:
+                model = XlaMaxPool(stride, padding)
+                out = _xla_run(model, x)
+                expected = model(x)
+                self.assertEqual(out.data, expected.data)
 
 
 class TestAvgPool(TestCase):
