@@ -142,6 +142,18 @@ index 0000000000..ff7b11cf1d
 +}  // namespace xla
 +
 +#endif  // TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
+diff --git a/tensorflow/compiler/xla/rpc/grpc_service_main.cc b/tensorflow/compiler/xla/rpc/grpc_service_main.cc
+index c68c857c30..7110c7065e 100644
+--- a/tensorflow/compiler/xla/rpc/grpc_service_main.cc
++++ b/tensorflow/compiler/xla/rpc/grpc_service_main.cc
+@@ -48,6 +48,7 @@ int RealMain(int argc, char** argv) {
+ 
+   builder.AddListeningPort(server_address, ::grpc::InsecureServerCredentials());
+   builder.RegisterService(service.get());
++  builder.SetMaxReceiveMessageSize(INT_MAX);
+   std::unique_ptr<::grpc::Server> server(builder.BuildAndStart());
+ 
+   LOG(INFO) << "Server listening on " << server_address;
 diff --git a/tensorflow/tf_exported_symbols.lds b/tensorflow/tf_exported_symbols.lds
 index 3ff824e5e1..39d1728b01 100644
 --- a/tensorflow/tf_exported_symbols.lds
