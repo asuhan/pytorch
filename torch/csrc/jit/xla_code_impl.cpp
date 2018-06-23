@@ -70,17 +70,15 @@ template <class NativeT>
 std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
     const at::Tensor& param_tensor,
     const xla::Shape& param_shape) {
-  std::vector<int64> dimension_sizes;
   size_t total_elements = 1;
   for (const auto dimension_size : param_tensor.sizes()) {
-    dimension_sizes.push_back(dimension_size);
     total_elements *= dimension_size;
   }
-  xla::Array<NativeT> parameter_xla_array(dimension_sizes);
-  parameter_xla_array.SetValues(
-      linearize_tensor<NativeT>(param_tensor, total_elements));
+  const auto linearized =
+      linearize_tensor<NativeT>(param_tensor, total_elements);
   xla::Literal literal(param_shape);
-  literal.PopulateFromArray(parameter_xla_array);
+  auto literal_buffer = literal.data<NativeT>().data();
+  std::copy(linearized.begin(), linearized.end(), literal_buffer);
   return TransferParameterToServer(literal);
 }
 

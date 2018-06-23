@@ -60,10 +60,10 @@ index 0d56a9a477..fd8353134d 100644
      srcs = ["grpc_service_main.cc"],
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.cc b/tensorflow/compiler/xla/rpc/computation_client.cc
 new file mode 100644
-index 0000000000..85f37844f2
+index 0000000000..16f7060f0a
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.cc
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,54 @@
 +#include "tensorflow/compiler/xla/rpc/computation_client.h"
 +
 +#include "grpc++/create_channel.h"
@@ -90,8 +90,10 @@ index 0000000000..85f37844f2
 +      grpc::XlaService::NewStub(channel);
 +  std::unique_ptr<GRPCStub> stub(new GRPCStub(xla_service.get()));
 +  std::unique_ptr<Client> client(new Client(stub.get()));
++  ExecutionOptions eo;
++  eo.set_seed(1234);
 +  StatusOr<std::unique_ptr<Literal>> result_or_status =
-+      client->ExecuteAndTransfer(computation, arguments, nullptr);
++      client->ExecuteAndTransfer(computation, arguments, &eo);
 +  if (!result_or_status.ok()) {
 +    LOG(FATAL) << result_or_status.status();
 +  }
