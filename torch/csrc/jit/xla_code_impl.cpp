@@ -217,11 +217,14 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
   return tensor_type->sizes();
 }
 
-std::vector<std::pair<int64, int64>> make_conv_padding(const Node* node) {
+std::vector<std::pair<int64, int64>> make_padding(
+    const Node* node,
+    const size_t padding_input_index) {
   const auto node_inputs = node->inputs();
-  CHECK_GE(node_inputs.size(), size_t(5));
+  CHECK_GE(node_inputs.size(), padding_input_index + 1);
   std::vector<std::pair<int64, int64>> dims_padding;
-  const auto padding = int_list_attr(node, node_inputs[4]->unique());
+  const auto padding =
+      int_list_attr(node, node_inputs[padding_input_index]->unique());
   for (const auto dim_padding : padding) {
     dims_padding.emplace_back(dim_padding, dim_padding);
   }
@@ -234,10 +237,10 @@ xla::XlaOp build_convolution(
     const xla::XlaOp& rhs,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
-  CHECK_GE(node_inputs.size(), size_t(4));
+  CHECK_GE(node_inputs.size(), size_t(5));
   const auto window_strides =
       xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
-  const auto dims_padding = make_conv_padding(node);
+  const auto dims_padding = make_padding(node, 4);
   return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
 }
 
@@ -298,21 +301,35 @@ xla::XlaOp build_max_pool2d(
   const auto max_computation = CreateMaxComputation();
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
   const auto node_inputs = node->inputs();
-  CHECK_GE(node_inputs.size(), size_t(2));
+  CHECK_GE(node_inputs.size(), size_t(4));
   const auto kernel_size =
       xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
-  const auto window_strides = window_dimensions;
-  return b->ReduceWindow(
+  std::vector<int64> window_strides;
+  const auto stride = int_list_attr(node, node_inputs[2]->unique());
+  if (stride.empty()) {
+    window_strides = window_dimensions;
+  } else {
+    window_strides.resize(2, 1);
+    const auto stride_attr = xla_i64_list(stride);
+    window_strides.insert(
+        window_strides.end(), stride_attr.begin(), stride_attr.end());
+  }
+  const auto spatial_padding = make_padding(node, 3);
+  std::vector<std::pair<int64, int64>> window_padding;
+  window_padding.resize(2);
+  window_padding.insert(
+      window_padding.end(), spatial_padding.begin(), spatial_padding.end());
+  return b->ReduceWindowWithGeneralPadding(
       input,
       b->ConstantLiteral(init_value),
       max_computation,
       window_dimensions,
       window_strides,
-      xla::Padding::kValid);
+      window_padding);
 }
 
 bool avg_pool2d_supported(const Node* node) {
