@@ -65,10 +65,10 @@ index 0000000000..152d0304ca
 +++ b/tensorflow/compiler/xla/rpc/computation_client.cc
 @@ -0,0 +1,79 @@
 +#include "tensorflow/compiler/xla/rpc/computation_client.h"
-+
 +#include "grpc++/create_channel.h"
 +#include "grpc++/support/channel_arguments.h"
 +#include "tensorflow/compiler/xla/client/client.h"
++#include "tensorflow/compiler/xla/legacy_flags/debug_options_flags.h"
 +#include "tensorflow/compiler/xla/rpc/grpc_stub.h"
 +
 +namespace xla {
@@ -110,7 +110,7 @@ index 0000000000..152d0304ca
 +    const XlaComputation& computation,
 +    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
 +  ExecutionOptions eo;
-+  eo.set_seed(1234);
++  *eo.mutable_debug_options() = legacy_flags::GetDebugOptionsFromFlags();
 +  StatusOr<std::unique_ptr<Literal>> result_or_status =
 +      client_->ExecuteAndTransfer(computation, arguments, &eo);
 +  if (!result_or_status.ok()) {
