@@ -150,8 +150,8 @@ class TestConv(TestCase):
             def forward(self, x):
                 return self.conv(x)
 
-        for stride in xrange(1, 4):
-            for padding in xrange(0, 3):
+        for stride in range(1, 4):
+            for padding in range(0, 3):
                 x = torch.randn(32, 10, 28, 28)
                 model = XlaConv(stride, padding)
                 out = _xla_run(model, x)
