@@ -3,6 +3,7 @@
 #ifdef WITH_XLA
 
 #include "tensorflow/compiler/xla/client/xla_client/xla_builder.h"
+#include "tensorflow/compiler/xla/rpc/computation_client.h"
 #include "torch/csrc/jit/ir.h"
 
 namespace torch {
@@ -27,6 +28,7 @@ class XlaCodeImpl {
       const std::vector<xla::Shape>& parameter_shapes) const;
 
   std::shared_ptr<Graph> graph_;
+  xla::XlaComputationClient client_;
 };
 
 } // namespace jit

@@ -1,6 +1,5 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/xla_code_impl.h"
-#include "tensorflow/compiler/xla/rpc/computation_client.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
 #include "torch/csrc/jit/passes/remove_expands.h"
@@ -69,7 +68,8 @@ std::vector<int64> linearize_tensor<int64>(
 template <class NativeT>
 std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
     const at::Tensor& param_tensor,
-    const xla::Shape& param_shape) {
+    const xla::Shape& param_shape,
+    const xla::XlaComputationClient* client) {
   size_t total_elements = 1;
   for (const auto dimension_size : param_tensor.sizes()) {
     total_elements *= dimension_size;
@@ -79,17 +79,18 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
   xla::Literal literal(param_shape);
   auto literal_buffer = literal.data<NativeT>().data();
   std::copy(linearized.begin(), linearized.end(), literal_buffer);
-  return TransferParameterToServer(literal);
+  return client->TransferParameterToServer(literal);
 }
 
 std::unique_ptr<xla::GlobalData> tensor_to_xla(
     const at::Tensor& param_tensor,
-    const xla::Shape& param_shape) {
+    const xla::Shape& param_shape,
+    const xla::XlaComputationClient* client) {
   switch (param_tensor.type().scalarType()) {
     case at::ScalarType::Float:
-      return tensor_to_xla_impl<float>(param_tensor, param_shape);
+      return tensor_to_xla_impl<float>(param_tensor, param_shape, client);
     case at::ScalarType::Long:
-      return tensor_to_xla_impl<int64>(param_tensor, param_shape);
+      return tensor_to_xla_impl<int64>(param_tensor, param_shape, client);
   }
 }
 
@@ -121,11 +122,11 @@ at::optional<at::Tensor> XlaCodeImpl::run(
        ++parameter_index) {
     CHECK_LT(parameter_index, inputs.size());
     const at::Tensor& param_tensor = inputs[parameter_index];
-    auto data =
-        tensor_to_xla(param_tensor, (*parameter_shapes)[parameter_index]);
+    auto data = tensor_to_xla(
+        param_tensor, (*parameter_shapes)[parameter_index], &client_);
     arguments.push_back(data.release());
   }
-  auto result_literal = xla::ExecuteComputation(computation, arguments);
+  auto result_literal = client_.ExecuteComputation(computation, arguments);
   const auto result_slice = result_literal->data<float>();
   std::vector<int64_t> dimensions;
   const auto& result_shape = result_literal->shape();
