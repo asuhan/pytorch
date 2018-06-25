@@ -38,31 +38,35 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
 }
 
 template <class NativeT>
-std::vector<NativeT> linearize_tensor(
+void linearize_tensor(
     const at::Tensor& t,
-    const size_t total_elements);
+    const size_t total_elements,
+    void* literal_buffer);
 
 template <>
-std::vector<float> linearize_tensor<float>(
+void linearize_tensor<float>(
     const at::Tensor& t,
-    const size_t total_elements) {
+    const size_t total_elements,
+    void* literal_buffer) {
   JIT_ASSERT(
       t.is_contiguous()); // the logic below works only for contiguous Tensors
-  std::vector<float> values(total_elements);
-  std::copy(t.data<float>(), t.data<float>() + total_elements, values.begin());
-  return values;
+  std::copy(
+      t.data<float>(),
+      t.data<float>() + total_elements,
+      static_cast<float*>(literal_buffer));
 }
 
 template <>
-std::vector<int64> linearize_tensor<int64>(
+void linearize_tensor<int64>(
     const at::Tensor& t,
-    const size_t total_elements) {
+    const size_t total_elements,
+    void* literal_buffer) {
   JIT_ASSERT(
       t.is_contiguous()); // the logic below works only for contiguous Tensors
-  std::vector<int64> values(total_elements);
   std::copy(
-      t.data<int64_t>(), t.data<int64_t>() + total_elements, values.begin());
-  return values;
+      t.data<int64_t>(),
+      t.data<int64_t>() + total_elements,
+      static_cast<int64_t*>(literal_buffer));
 }
 
 template <class NativeT>
@@ -74,11 +78,9 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
   for (const auto dimension_size : param_tensor.sizes()) {
     total_elements *= dimension_size;
   }
-  const auto linearized =
-      linearize_tensor<NativeT>(param_tensor, total_elements);
   xla::Literal literal(param_shape);
-  auto literal_buffer = literal.data<NativeT>().data();
-  std::copy(linearized.begin(), linearized.end(), literal_buffer);
+  linearize_tensor<NativeT>(
+      param_tensor, total_elements, literal.data<NativeT>().data());
   return client->TransferParameterToServer(literal);
 }
 
