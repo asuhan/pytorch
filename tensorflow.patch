@@ -60,18 +60,37 @@ index 0d56a9a477..fd8353134d 100644
      srcs = ["grpc_service_main.cc"],
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.cc b/tensorflow/compiler/xla/rpc/computation_client.cc
 new file mode 100644
-index 0000000000..04a2e608f1
+index 0000000000..152d0304ca
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.cc
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,79 @@
 +#include "tensorflow/compiler/xla/rpc/computation_client.h"
 +
 +#include "grpc++/create_channel.h"
 +#include "grpc++/support/channel_arguments.h"
++#include "tensorflow/compiler/xla/client/client.h"
++#include "tensorflow/compiler/xla/rpc/grpc_stub.h"
 +
 +namespace xla {
 +
-+XlaComputationClient::XlaComputationClient() {
++class XlaComputationClientImpl {
++ public:
++  XlaComputationClientImpl();
++
++  std::unique_ptr<xla::GlobalData> TransferParameterToServer(
++      const xla::Literal& literal) const;
++
++  std::unique_ptr<Literal> ExecuteComputation(
++      const XlaComputation& computation,
++      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++
++ private:
++  std::unique_ptr<Client> client_;
++  std::unique_ptr<grpc::XlaService::Stub> xla_service_;
++  std::unique_ptr<GRPCStub> stub_;
++};
++
++XlaComputationClientImpl::XlaComputationClientImpl() {
 +  constexpr int port = 51000;
 +  ::grpc::ChannelArguments ch_args;
 +  ch_args.SetMaxReceiveMessageSize(-1);
@@ -87,7 +106,7 @@ index 0000000000..04a2e608f1
 +  client_.reset(new Client(stub_.get()));
 +}
 +
-+std::unique_ptr<Literal> XlaComputationClient::ExecuteComputation(
++std::unique_ptr<Literal> XlaComputationClientImpl::ExecuteComputation(
 +    const XlaComputation& computation,
 +    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
 +  ExecutionOptions eo;
@@ -101,33 +120,52 @@ index 0000000000..04a2e608f1
 +}
 +
 +std::unique_ptr<xla::GlobalData>
-+XlaComputationClient::TransferParameterToServer(
++XlaComputationClientImpl::TransferParameterToServer(
 +    const xla::Literal& literal) const {
 +  return client_->TransferToServer(literal).ValueOrDie();
 +}
 +
++XlaComputationClient::XlaComputationClient()
++    : pImpl(new XlaComputationClientImpl()) {}
++
++std::unique_ptr<Literal> XlaComputationClient::ExecuteComputation(
++    const XlaComputation& computation,
++    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
++  return pImpl->ExecuteComputation(computation, arguments);
++}
++
++std::unique_ptr<xla::GlobalData>
++XlaComputationClient::TransferParameterToServer(
++    const xla::Literal& literal) const {
++  return pImpl->TransferParameterToServer(literal);
++}
++
++XlaComputationClient::~XlaComputationClient() = default;
++
 +}  // namespace xla
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.h b/tensorflow/compiler/xla/rpc/computation_client.h
 new file mode 100644
-index 0000000000..50cd2046f1
+index 0000000000..961e93f168
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.h
 @@ -0,0 +1,32 @@
 +#ifndef TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +#define TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +
-+#include "tensorflow/compiler/xla/client/client.h"
 +#include "tensorflow/compiler/xla/client/global_data.h"
 +#include "tensorflow/compiler/xla/client/xla_client/xla_computation.h"
 +#include "tensorflow/compiler/xla/literal_util.h"
-+#include "tensorflow/compiler/xla/rpc/grpc_stub.h"
 +#include "tensorflow/core/lib/gtl/array_slice.h"
 +
 +namespace xla {
 +
++class XlaComputationClientImpl;
++
 +class XlaComputationClient {
 + public:
 +  XlaComputationClient();
++
++  ~XlaComputationClient();
 +
 +  std::unique_ptr<xla::GlobalData> TransferParameterToServer(
 +      const xla::Literal& literal) const;
@@ -137,9 +175,7 @@ index 0000000000..50cd2046f1
 +      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
 +
 + private:
-+  std::unique_ptr<Client> client_;
-+  std::unique_ptr<grpc::XlaService::Stub> xla_service_;
-+  std::unique_ptr<GRPCStub> stub_;
++  std::unique_ptr<XlaComputationClientImpl> pImpl;
 +};
 +
 +}  // namespace xla
