@@ -285,13 +285,14 @@ xla::XlaOp build_max_pool2d(
       window_padding);
 }
 
-bool avg_pool2d_supported(const Node* node) {
-  const auto ceil_mode = node->i(attr::ceil_mode);
-  if (ceil_mode) {
-    LOG(INFO) << "ceil_mode not supported for avg_pool2d yet";
-    return false;
-  }
-  return true;
+xla::XlaComputation CreateGeComputation() {
+  xla::XlaBuilder reduction_builder("xla_ge_computation");
+  const auto x = reduction_builder.Parameter(
+      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
+  const auto y = reduction_builder.Parameter(
+      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
+  reduction_builder.Ge(x, y);
+  return reduction_builder.Build().ConsumeValueOrDie();
 }
 
 xla::XlaComputation CreateAddComputation() {
@@ -302,6 +303,55 @@ xla::XlaComputation CreateAddComputation() {
       1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
   reduction_builder.Add(x, y);
   return reduction_builder.Build().ConsumeValueOrDie();
+}
+
+xla::XlaOp build_max_pool2d_backward(
+    const Node* node,
+    const xla::XlaOp& out_backprop,
+    const xla::XlaOp& input,
+    xla::XlaBuilder* b) {
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto init_value = b->ConstantLiteral(*zero_literal);
+  const auto select = CreateGeComputation();
+  const auto scatter = CreateAddComputation();
+  std::vector<int64> window_dimensions;
+  window_dimensions.resize(2, 1);
+  const auto kernel_size = xla_i64_list(node->is(attr::kernel_size));
+  window_dimensions.insert(
+      window_dimensions.end(), kernel_size.begin(), kernel_size.end());
+  std::vector<int64> window_strides;
+  const auto stride = node->is(attr::stride);
+  if (stride.empty()) {
+    window_strides = window_dimensions;
+  } else {
+    window_strides.resize(2, 1);
+    const auto stride_attr = xla_i64_list(stride);
+    window_strides.insert(
+        window_strides.end(), stride_attr.begin(), stride_attr.end());
+  }
+  const auto spatial_padding = make_padding(node);
+  std::vector<std::pair<int64, int64>> window_padding;
+  window_padding.resize(2);
+  window_padding.insert(
+      window_padding.end(), spatial_padding.begin(), spatial_padding.end());
+  return b->SelectAndScatterWithGeneralPadding(
+      input,
+      select,
+      window_dimensions,
+      window_strides,
+      window_padding,
+      out_backprop,
+      init_value,
+      scatter);
+}
+
+bool avg_pool2d_supported(const Node* node) {
+  const auto ceil_mode = node->i(attr::ceil_mode);
+  if (ceil_mode) {
+    LOG(INFO) << "ceil_mode not supported for avg_pool2d yet";
+    return false;
+  }
+  return true;
 }
 
 at::optional<xla::XlaOp> build_avg_pool2d(
@@ -661,6 +711,15 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::max_pool2d: {
         CHECK_EQ(node->inputs().size(), 1);
         xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
+        current_unique = node->outputs()[0]->unique(); // ignore indices
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::max_pool2d_backward: {
+        CHECK_EQ(node->inputs().size(), 3);
+        xla::XlaOp xla_output =
+            build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
         current_unique = node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
