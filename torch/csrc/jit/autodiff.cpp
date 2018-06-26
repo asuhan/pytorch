@@ -44,7 +44,8 @@ bool isDifferentiable(Node * n) {
     "aten::ge(Tensor self, Tensor other) -> Tensor",
     "aten::eq(Tensor self, Tensor other) -> Tensor",
     "aten::ne(Tensor self, Tensor other) -> Tensor",
-    "aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor"
+    "aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor",
+    "aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)"
   };
 
   if (n->kind() == prim::Constant || n->kind() == prim::AutogradAdd)
@@ -324,6 +325,20 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                                                     padding, ceil_mode,
                                                     count_include_pad),
                                                     nullptr, nullptr, nullptr, nullptr, nullptr};
+    } else if (node->matches("aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)")) {
+      JIT_ASSERT(grads.size() == 2);
+      const auto kernel_size = int_list_attr(node, node->namedInput(attr::kernel_size)->unique());
+      const auto stride = int_list_attr(node, node->namedInput(attr::stride)->unique());
+      const auto padding = int_list_attr(node, node->namedInput(attr::padding)->unique());
+      const auto dilation = int_list_attr(node, node->namedInput(attr::dilation)->unique());
+      const auto ceil_mode = int_attr(node, node->namedInput(attr::ceil_mode)->unique());
+      return {SymbolicVariable::max_pool2d_with_indices_backward(grads.at(0), inputs.at(0),
+                                                                 grads.at(1),
+                                                                 node->is(attr::kernel_size),
+                                                                 node->is(attr::stride),
+                                                                 node->is(attr::padding),
+                                                                 node->is(attr::dilation),
+                                                                 node->i(attr::ceil_mode))};
     } else if (node->kind() == prim::Constant) {
       return {};
     }
