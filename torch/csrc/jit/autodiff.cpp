@@ -20,7 +20,7 @@ bool isDifferentiable(Node * n) {
     aten::add, aten::sub, aten::mul, prim::Constant, prim::ReplaceIfUndef,
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
-    aten::relu, aten::exp, aten::max_pool2d, prim::AutogradAdd
+    aten::relu, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -210,6 +210,15 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                                                       node->is(attr::padding),
                                                       node->is(attr::dilation),
                                                       node->i(attr::ceil_mode))};
+      }
+      case aten::avg_pool2d: {
+        JIT_ASSERT(grads.size() == 1);
+        return {SymbolicVariable::avg_pool2d_backward(grads.at(0), inputs.at(0),
+                                                      node->is(attr::kernel_size),
+                                                      node->is(attr::stride),
+                                                      node->is(attr::padding),
+                                                      node->i(attr::ceil_mode),
+                                                      node->i(attr::count_include_pad))};
       }
     }
     throw std::runtime_error(std::string("don't support differentiation of `") +
