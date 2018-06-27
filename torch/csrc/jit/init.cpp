@@ -115,6 +115,9 @@ void initJITBindings(PyObject *module) {
    m.def("_to_xla_module", [](script::Module& module) {
      return ToXLA(module);
    });
+   m.def("_to_xla_module_grad", [](script::Module& module, std::shared_ptr<Graph> graph) {
+     return ToXLAGrad(module, graph);
+   });
 #endif  // WITH_XLA
 
   py::class_<ArgumentSpec>(m, "ArgumentSpec")
