@@ -7,5 +7,10 @@ namespace torch {
 namespace jit {
 
 std::shared_ptr<XlaModule> ToXLA(script::Module& module);
-}
+
+std::shared_ptr<XlaModule> ToXLAGrad(
+    script::Module& module,
+    std::shared_ptr<Graph> graph);
+
+} // namespace jit
 } // namespace torch
