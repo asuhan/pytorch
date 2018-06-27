@@ -136,7 +136,7 @@ std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
   const auto nodes = parent->owningGraph()->block()->nodes();
   std::vector<int64_t> result;
   for (const auto node : nodes) {
-    if (node->kind() != prim::ListConstruct) {
+    if (node->kind() != prim::ListConstruct && node->kind() != prim::Constant) {
       continue;
     }
     const auto node_outputs = node->outputs();
@@ -144,6 +144,11 @@ std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
     const auto output = node_outputs[0];
     if (output->unique() != id) {
       continue;
+    }
+    if (node->kind() == prim::Constant) {
+      JIT_ASSERT(output->type()->kind() == TypeKind::ListType);
+      JIT_ASSERT(output->type()->expect<ListType>()->getElementType()->kind() == TypeKind::IntType);
+      return node->is(attr::value);
     }
     const auto node_inputs = node->inputs();
     for (const auto input : node_inputs) {
