@@ -276,7 +276,7 @@ class TestAvgPoolGrad(TestCase):
 
         class DiffAvgPoolGrad(nn.Module):
             def forward(self, x):
-                return F.avg_pool2d(x, 2)
+                return F.avg_pool2d(x, 2, stride=1)
 
         x = torch.randn(4, 1, 28, 28, requires_grad=True)
         model = DiffAvgPoolGrad()
@@ -304,7 +304,7 @@ class TestAvgPoolGrad(TestCase):
         outputs = raw_outputs[:gradient.f_real_outputs]
 
         # backward function
-        grad_outputs = [torch.randn(4, 1, 14, 14)] # random grad_output
+        grad_outputs = [torch.randn(4, 1, 27, 27)] # random grad_output
 
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
@@ -312,12 +312,15 @@ class TestAvgPoolGrad(TestCase):
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
         grad_input = exec_df(*raw_grad_outputs)
+        traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
+        xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
         out_groundtruth = model(x)
         out_groundtruth.backward(*grad_outputs)
         self.assertEqual(outputs[0], out_groundtruth)
         self.assertEqual(grad_input, inputs[0].grad)
+        self.assertEqual(grad_input, xla_grad_input)
 
 
 if __name__ == '__main__':
