@@ -43,7 +43,8 @@ bool isDifferentiable(Node * n) {
     "aten::gt(Tensor self, Tensor other) -> Tensor",
     "aten::ge(Tensor self, Tensor other) -> Tensor",
     "aten::eq(Tensor self, Tensor other) -> Tensor",
-    "aten::ne(Tensor self, Tensor other) -> Tensor"
+    "aten::ne(Tensor self, Tensor other) -> Tensor",
+    "aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor"
   };
 
   if (n->kind() == prim::Constant || n->kind() == prim::AutogradAdd)
@@ -111,6 +112,68 @@ bool outputRequiresGrad(Node* node, std::function<bool(Value*)> requires_grad) {
     default:
       return std::any_of(node->inputs().begin(), node->inputs().end(), requires_grad);
   }
+}
+
+int64_t int_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      JIT_ASSERT(output->type()->kind() == TypeKind::IntType);
+      return node->i(attr::value);
+    }
+  }
+  JIT_ASSERTM(false, "Constant with id ", id, " not found.");
+}
+
+std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  std::vector<int64_t> result;
+  for (const auto node : nodes) {
+    if (node->kind() != prim::ListConstruct) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() != id) {
+      continue;
+    }
+    const auto node_inputs = node->inputs();
+    for (const auto input : node_inputs) {
+      result.push_back(int_attr(node, input->unique()));
+    }
+    return result;
+  }
+  JIT_ASSERTM(false, "Constant with id ", id, " not found.");
+}
+
+float float_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      switch (node_outputs[0]->type()->kind()) {
+        case TypeKind::FloatType:
+          return node->f(attr::value);
+        case TypeKind::IntType:
+          return node->i(attr::value);
+        default:
+          JIT_ASSERTM(false, "Cannot cast type to float");
+      }
+    }
+  }
+  JIT_ASSERTM(false, "Constant with id ", id, " not found.");
 }
 
 static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_values) {
@@ -249,6 +312,18 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
         return tensor_grads;
       }
 
+    } else if (node->matches("aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor")) {
+      JIT_ASSERT(grads.size() == 1);
+      const auto kernel_size = int_list_attr(node, node->namedInput(attr::kernel_size)->unique());
+      const auto stride = int_list_attr(node, node->namedInput(attr::stride)->unique());
+      const auto padding = int_list_attr(node, node->namedInput(attr::padding)->unique());
+      const auto ceil_mode = int_attr(node, node->namedInput(attr::ceil_mode)->unique());
+      const auto count_include_pad = int_attr(node, node->namedInput(attr::count_include_pad)->unique());
+      return {SymbolicVariable::avg_pool2d_backward(grads.at(0), inputs.at(0),
+                                                    kernel_size, stride,
+                                                    padding, ceil_mode,
+                                                    count_include_pad),
+                                                    nullptr, nullptr, nullptr, nullptr, nullptr};
     } else if (node->kind() == prim::Constant) {
       return {};
     }

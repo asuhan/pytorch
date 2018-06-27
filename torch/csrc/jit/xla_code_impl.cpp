@@ -1,5 +1,6 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/xla_code_impl.h"
+#include "torch/csrc/jit/autodiff.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
 #include "torch/csrc/jit/passes/remove_expands.h"
@@ -173,45 +174,6 @@ xla::XlaOp build_binary_op(
     default:
       LOG(FATAL) << "Invalid binary operator kind: " << node->kind();
   }
-}
-
-int64_t int_attr(const Node* parent, const size_t id) {
-  const auto nodes = parent->owningGraph()->block()->nodes();
-  for (const auto node : nodes) {
-    if (node->kind() != prim::Constant) {
-      continue;
-    }
-    const auto node_outputs = node->outputs();
-    CHECK_EQ(node_outputs.size(), size_t(1));
-    const auto output = node_outputs[0];
-    if (output->unique() == id) {
-      CHECK(output->type()->kind() == TypeKind::IntType);
-      return node->i(attr::value);
-    }
-  }
-  CHECK(false) << "Constant with id " << id << " not found.";
-}
-
-std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
-  const auto nodes = parent->owningGraph()->block()->nodes();
-  std::vector<int64_t> result;
-  for (const auto node : nodes) {
-    if (node->kind() != prim::ListConstruct) {
-      continue;
-    }
-    const auto node_outputs = node->outputs();
-    CHECK_EQ(node_outputs.size(), size_t(1));
-    const auto output = node_outputs[0];
-    if (output->unique() != id) {
-      continue;
-    }
-    const auto node_inputs = node->inputs();
-    for (const auto input : node_inputs) {
-      result.push_back(int_attr(node, input->unique()));
-    }
-    return result;
-  }
-  CHECK(false) << "Constant with id " << id << " not found.";
 }
 
 std::vector<int64_t> tensor_sizes(const Value* tensor) {
@@ -460,29 +422,6 @@ at::optional<xla::XlaOp> build_log_softmax(
   const auto reduce =
       b->Reduce(exp_shifted, xla_zero, CreateAddComputation(), {dim});
   return b->Sub(shifted_logits, b->Log(reduce), broadcast_dimensions);
-}
-
-float float_attr(const Node* parent, const size_t id) {
-  const auto nodes = parent->owningGraph()->block()->nodes();
-  for (const auto node : nodes) {
-    if (node->kind() != prim::Constant) {
-      continue;
-    }
-    const auto node_outputs = node->outputs();
-    CHECK_EQ(node_outputs.size(), size_t(1));
-    const auto output = node_outputs[0];
-    if (output->unique() == id) {
-      switch (node_outputs[0]->type()->kind()) {
-        case TypeKind::FloatType:
-          return node->f(attr::value);
-        case TypeKind::IntType:
-          return node->i(attr::value);
-        default:
-          CHECK(false) << "Cannot cast type to float";
-      }
-    }
-  }
-  CHECK(false) << "Constant with id " << id << " not found.";
 }
 
 xla::XlaOp build_threshold(

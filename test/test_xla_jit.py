@@ -272,6 +272,55 @@ class TestMNIST(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+class TestAvgPoolGrad(TestCase):
+    def test(self):
+
+        class DiffAvgPoolGrad(nn.Module):
+            def forward(self, x):
+                return F.avg_pool2d(x, 2)
+
+        x = torch.randn(4, 1, 28, 28, requires_grad=True)
+        model = DiffAvgPoolGrad()
+
+        traced_model = torch.jit.trace(x)(model)
+        fwd = traced_model._get_method('forward')
+        torch._C._jit_pass_decompose_addmm(fwd.graph)
+
+        # for now, all inputs require grad, not just parameters
+        inputs_require_grad = [True for i in fwd.graph.inputs()]
+        gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
+
+        defined_df_inputs = [True for i in gradient.df.inputs()] # all df inputs are defined (usual case)
+        torch._C._jit_pass_specialize_undef(gradient.df, defined_df_inputs)
+
+        exec_f = torch._C.GraphExecutor(gradient.f, False)
+        exec_df = torch._C.GraphExecutor(gradient.df, True)
+
+        # forward function
+        inputs = [x]
+        raw_outputs = exec_f(*inputs)
+
+        if isinstance(raw_outputs, torch.Tensor):
+            raw_outputs = [raw_outputs]
+        outputs = raw_outputs[:gradient.f_real_outputs]
+
+        # backward function
+        grad_outputs = [torch.randn(4, 1, 14, 14)] # random grad_output
+
+        raw_grad_outputs = []
+        raw_grad_outputs += grad_outputs
+        raw_grad_outputs += [inputs[i] for i in gradient.df_input_captured_inputs]
+        raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
+
+        grad_input = exec_df(*raw_grad_outputs)
+
+        # forward + backward with regular autograd / torch
+        out_groundtruth = model(x)
+        out_groundtruth.backward(*grad_outputs)
+        self.assertEqual(outputs[0], out_groundtruth)
+        self.assertEqual(grad_input, inputs[0].grad)
+
+
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
     run_tests()

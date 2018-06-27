@@ -174,6 +174,19 @@ struct SymbolicVariable {
   Value * value() const {
     return v;
   }
+  static SymbolicVariable avg_pool2d_backward(const SymbolicVariable grad,
+                                              const SymbolicVariable input,
+                                              const std::vector<int64_t>& kernel_size,
+                                              const std::vector<int64_t>& stride,
+                                              const std::vector<int64_t>& padding,
+                                              const bool ceil_mode,
+                                              const bool count_include_pad) {
+    return create(aten::avg_pool2d_backward, {
+      grad, input, grad.insertConstant(kernel_size),
+      grad.insertConstant(stride), grad.insertConstant(padding),
+      grad.insertConstant(ceil_mode),
+      grad.insertConstant(count_include_pad)})[0];
+  }
 private:
   Value * insertConstant(IValue value) const {
     return v->owningGraph()->insertConstant(value);
