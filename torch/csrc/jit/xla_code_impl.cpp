@@ -442,6 +442,7 @@ xla::PaddingConfig::PaddingConfigDimension make_avg_pool2d_backprop_padding(
   padding_config_dimension.set_edge_padding_low(pad_before);
   padding_config_dimension.set_edge_padding_high(
       padded_out_size - expanded_output_size - pad_before);
+  padding_config_dimension.set_interior_padding(stride - 1);
   return padding_config_dimension;
 }
 
@@ -455,19 +456,19 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
     return at::nullopt;
   }
   const auto kernel_size = xla_i64_list(int_list_attr(node, attr::kernel_size));
-  const auto stride = xla_i64_list(int_list_attr(node, attr::stride));
-  if (stride.empty() || stride[0] != 1 || stride[1] != 1) {
-    // TODO
-    return at::nullopt;
-  }
-  CHECK_EQ(stride.size(), 2);
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   std::vector<int64> window_strides;
-  window_strides.resize(2, 1);
-  window_strides.insert(window_strides.end(), stride.begin(), stride.end());
+  const auto stride = xla_i64_list(int_list_attr(node, attr::stride));
+  if (stride.empty()) {
+    window_strides = window_dimensions;
+  } else {
+    CHECK_EQ(stride.size(), 2);
+    window_strides.resize(2, 1);
+    window_strides.insert(window_strides.end(), stride.begin(), stride.end());
+  }
   const auto padding = int_list_attr(node, attr::padding);
   CHECK_EQ(padding.size(), 2);
   if (padding[0] || padding[1]) {
@@ -484,19 +485,23 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
   for (int i = 0; i < 2; ++i) {
     auto dims = padding_config.add_dimensions();
     *dims = make_avg_pool2d_backprop_padding(
-        kernel_size[i], input_size[2 + i], stride[i], output_size[2 + i]);
+        kernel_size[i],
+        input_size[2 + i],
+        window_strides[2 + i],
+        output_size[2 + i]);
   }
   const auto add_computation = CreateAddComputation();
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
   const auto padded_out_backprop =
       b->Pad(out_backprop, xla_zero, padding_config);
+  std::vector<int64> ones(4, 1LL);
   const auto sum = b->ReduceWindow(
       padded_out_backprop,
       xla_zero,
       add_computation,
       window_dimensions,
-      window_strides,
+      ones,
       xla::Padding::kValid);
   const auto kernel_elements = std::accumulate(
       kernel_size.begin(),
