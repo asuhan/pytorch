@@ -20,7 +20,7 @@ bool isDifferentiable(Node * n) {
     aten::add, aten::sub, aten::mul, prim::Constant, prim::ReplaceIfUndef,
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
-    aten::relu, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd
+    aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -108,7 +108,7 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       case aten::relu:
         return {grads.at(0) * (outputs.at(0) > at::Scalar(0)).type_as(outputs.at(0))};
       case aten::threshold:
-        return {grads.at(0) * (outputs.at(0) > at::Scalar(node->t(attr::threshold))).type_as(outputs.at(0))};
+        return {grads.at(0) * (inputs.at(0) > at::Scalar(node->t(attr::threshold))).type_as(outputs.at(0))};
       case aten::exp:
         return {grads.at(0) * (outputs.at(0))};
       case aten::chunk:

@@ -272,15 +272,8 @@ class TestMNIST(TestCase):
 
 
 class TestAvgPoolGrad(TestCase):
-    def test(self):
 
-        class DiffAvgPoolGrad(nn.Module):
-            def forward(self, x):
-                return F.avg_pool2d(x, 2, stride=1)
-
-        x = torch.randn(4, 1, 28, 28, requires_grad=True)
-        model = DiffAvgPoolGrad()
-
+    def checkGrad(self, model, x, grad_outputs):
         traced_model = torch.jit.trace(x)(model)
         fwd = traced_model._get_method('forward')
         torch._C._jit_pass_decompose_addmm(fwd.graph)
@@ -303,15 +296,13 @@ class TestAvgPoolGrad(TestCase):
             raw_outputs = [raw_outputs]
         outputs = raw_outputs[:gradient.f_real_outputs]
 
-        # backward function
-        grad_outputs = [torch.randn(4, 1, 27, 27)] # random grad_output
-
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
         raw_grad_outputs += [inputs[i] for i in gradient.df_input_captured_inputs]
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
         grad_input = exec_df(*raw_grad_outputs)
+        # backward with XLA
         traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
         xla_grad_input = traced_backward(*raw_grad_outputs)
 
@@ -321,6 +312,30 @@ class TestAvgPoolGrad(TestCase):
         self.assertEqual(outputs[0], out_groundtruth)
         self.assertEqual(grad_input, inputs[0].grad)
         self.assertEqual(grad_input, xla_grad_input)
+
+    def test_avgpool(self):
+        class AvgPoolGrad(nn.Module):
+            def forward(self, x):
+                return F.avg_pool2d(x, 2, stride=1)
+
+        model = AvgPoolGrad()
+        x = torch.randn(4, 1, 28, 28, requires_grad=True)
+        grad_outputs = [torch.randn(4, 1, 27, 27)] # random grad_output
+        self.checkGrad(model, x, grad_outputs)
+
+    def test_threshold(self):
+        class ThresholdPoolGrad(nn.Module):
+            def __init__(self):
+                super(ThresholdPoolGrad, self).__init__()
+                self.threshold = nn.Threshold(0.4, 20)
+
+            def forward(self, x):
+                return self.threshold(x)
+
+        model = ThresholdPoolGrad()
+        x = torch.randn(4, 2, requires_grad=True)
+        grad_outputs = [torch.randn(4, 2)] # random grad_output
+        self.checkGrad(model, x, grad_outputs)
 
 
 if __name__ == '__main__':
