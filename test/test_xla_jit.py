@@ -337,12 +337,17 @@ class TestAvgPoolGrad(TestCase):
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
-            def forward(self, x):
-                return F.avg_pool2d(x, 2, stride=1)
+            def __init__(self, stride):
+                super(AvgPoolGrad, self).__init__()
+                self.stride = stride
 
-        model = AvgPoolGrad()
-        inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
-        self.checkGrad(model, inputs)
+            def forward(self, x):
+                return F.avg_pool2d(x, 2, stride=self.stride)
+
+        for stride in [1, 2, None]:
+            model = AvgPoolGrad(stride)
+            inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
+            self.checkGrad(model, inputs)
 
     def test_threshold(self):
         class ThresholdPoolGrad(nn.Module):
