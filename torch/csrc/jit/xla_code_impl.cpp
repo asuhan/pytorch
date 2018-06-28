@@ -415,7 +415,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
     const auto counts = b->ReduceWindow(
         padded_ones,
         xla_zero,
-        CreateAddComputation(),
+        add_computation,
         window_dimensions,
         window_strides,
         xla::Padding::kValid);
@@ -427,10 +427,11 @@ xla::PaddingConfig::PaddingConfigDimension make_avg_pool2d_backprop_padding(
     const int64_t kernel_size,
     const int64_t input_size,
     const int64_t stride,
-    const int64_t output_size) {
+    const int64_t output_size,
+    const int64_t input_padding) {
   xla::PaddingConfig::PaddingConfigDimension padding_config_dimension;
   const auto expanded_output_size = (output_size - 1) * stride + 1;
-  const auto padded_out_size = input_size + kernel_size - 1;
+  const auto padded_out_size = input_size + 2 * input_padding + kernel_size - 1;
   const auto pad_before = kernel_size - 1;
   padding_config_dimension.set_edge_padding_low(pad_before);
   padding_config_dimension.set_edge_padding_high(
@@ -464,10 +465,6 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
   }
   const auto& padding = node->is(attr::padding);
   CHECK_EQ(padding.size(), 2);
-  if (padding[0] || padding[1]) {
-    // TODO
-    return at::nullopt;
-  }
   xla::PaddingConfig padding_config;
   for (int i = 0; i < 2; ++i) {
     padding_config.add_dimensions();
@@ -481,21 +478,37 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
         kernel_size[i],
         input_size[2 + i],
         window_strides[2 + i],
-        output_size[2 + i]);
+        output_size[2 + i],
+        padding[i]);
   }
   const auto add_computation = CreateAddComputation();
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
   const auto padded_out_backprop =
       b->Pad(out_backprop, xla_zero, padding_config);
-  std::vector<int64> ones(4, 1LL);
+  std::vector<int64> one_strides(4, 1LL);
   const auto sum = b->ReduceWindow(
       padded_out_backprop,
       xla_zero,
       add_computation,
       window_dimensions,
-      ones,
+      one_strides,
       xla::Padding::kValid);
+  xla::PaddingConfig remove_padding_config;
+  for (int i = 0; i < 2; ++i) {
+    remove_padding_config.add_dimensions();
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto dims = remove_padding_config.add_dimensions();
+    dims->set_edge_padding_low(-padding[i]);
+    dims->set_edge_padding_high(-padding[i]);
+  }
+  const auto count_include_pad = node->i(attr::count_include_pad);
+  if (!count_include_pad) {
+    LOG(INFO)
+        << "avg_pool2d_backward with count_include_pad=False not supported yet";
+    return at::nullopt;
+  }
   const auto kernel_elements = std::accumulate(
       kernel_size.begin(),
       kernel_size.end(),
@@ -503,7 +516,8 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
       [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
   const auto count_literal = xla::Literal::CreateR0<float>(kernel_elements);
   const auto count = b->ConstantLiteral(*count_literal);
-  return b->Div(sum, count);
+  const auto sum_removed_padding = b->Pad(sum, xla_zero, remove_padding_config);
+  return b->Div(sum_removed_padding, count);
 }
 
 at::optional<xla::XlaOp> build_log_softmax(
