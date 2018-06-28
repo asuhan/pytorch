@@ -351,12 +351,13 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       const auto dilation = int_list_attr(node, attr::dilation);
       const auto ceil_mode = int_attr(node, attr::ceil_mode);
       return {SymbolicVariable::max_pool2d_with_indices_backward(grads.at(0), inputs.at(0),
-                                                                 grads.at(1),
-                                                                 node->is(attr::kernel_size),
-                                                                 node->is(attr::stride),
-                                                                 node->is(attr::padding),
-                                                                 node->is(attr::dilation),
-                                                                 node->i(attr::ceil_mode))};
+                                                                 outputs.at(1),
+                                                                 kernel_size,
+                                                                 stride,
+                                                                 padding,
+                                                                 dilation,
+                                                                 ceil_mode),
+                                                                 nullptr, nullptr, nullptr, nullptr, nullptr};
     } else if (node->kind() == prim::Constant) {
       return {};
     }
