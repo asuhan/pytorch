@@ -206,7 +206,7 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       case aten::max_pool2d: {
         JIT_ASSERT(grads.size() == 2);
         return {SymbolicVariable::max_pool2d_backward(grads.at(0), inputs.at(0),
-                                                      grads.at(1),
+                                                      outputs.at(1),
                                                       node->is(attr::kernel_size),
                                                       node->is(attr::stride),
                                                       node->is(attr::padding),
