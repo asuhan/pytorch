@@ -9,6 +9,17 @@ def _xla_run(model, input):
     return torch._C._to_xla_module(traced_model)(input)
 
 
+def _forward_passes(graph):
+    torch._C._jit_pass_decompose_addmm(graph)
+    torch._C._jit_pass_dce(graph)
+
+
+def _backward_passes(graph):
+    defined = [True for i in graph.inputs()]
+    torch._C._jit_pass_specialize_undef(graph, defined)
+    torch._C._jit_pass_dce(graph)
+
+
 class TestMulAdd(TestCase):
     def test(self):
 
@@ -274,45 +285,56 @@ class TestMNIST(TestCase):
 
 class TestAvgPoolGrad(TestCase):
 
-    def checkGrad(self, model, x, grad_outputs):
-        traced_model = torch.jit.trace(x)(model)
+    def checkGrad(self, model, inputs, grad_outputs='random'):
+        traced_model = torch.jit.trace(*inputs)(model)
         fwd = traced_model._get_method('forward')
-        torch._C._jit_pass_decompose_addmm(fwd.graph)
+        _forward_passes(fwd.graph)
 
-        # for now, all inputs require grad, not just parameters
-        inputs_require_grad = [True for i in fwd.graph.inputs()]
+        inputs_require_grad = [i.requires_grad for i in inputs]
         gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
-
-        defined_df_inputs = [True for i in gradient.df.inputs()] # all df inputs are defined (usual case)
-        torch._C._jit_pass_specialize_undef(gradient.df, defined_df_inputs)
+        _forward_passes(gradient.f)
+        _backward_passes(gradient.df)
 
         exec_f = torch._C.GraphExecutor(gradient.f, False)
-        exec_df = torch._C.GraphExecutor(gradient.df, True)
+        exec_df = torch._C.GraphExecutor(gradient.df, False)
 
         # forward function
-        inputs = [x]
         raw_outputs = exec_f(*inputs)
 
         if isinstance(raw_outputs, torch.Tensor):
             raw_outputs = [raw_outputs]
         outputs = raw_outputs[:gradient.f_real_outputs]
 
+        if grad_outputs == 'random':
+            grad_outputs = []
+            for o in raw_outputs:
+                if o.dtype == torch.float32 or o.dtype == torch.float64:
+                    grad_outputs += [torch.randn(*o.shape, dtype=o.dtype)]
+                elif o.dtype == torch.int64:
+                    # TODO remove this, we shouldn't be needing to pass grad_output for long types
+                    grad_outputs += [torch.empty_like(o)]
+                else:
+                    raise RuntimeError("Unsupported type: ", o.dtype)
+
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
         raw_grad_outputs += [inputs[i] for i in gradient.df_input_captured_inputs]
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
-        grad_input = exec_df(*raw_grad_outputs)
+        grad_inputs = exec_df(*raw_grad_outputs)
+        if isinstance(grad_inputs, torch.Tensor):
+            grad_inputs = [grad_inputs]
+
         # backward with XLA
         traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
         xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
-        out_groundtruth = model(x)
-        out_groundtruth.backward(*grad_outputs)
+        out_groundtruth = model(*inputs)
+        out_groundtruth.backward(grad_outputs[0]) # TODO: generalize it to *grad_outputs
         self.assertEqual(outputs[0], out_groundtruth)
-        self.assertEqual(grad_input, inputs[0].grad)
-        self.assertEqual(grad_input, xla_grad_input)
+        self.assertEqual(grad_inputs[0], inputs[0].grad)
+        self.assertEqual(grad_inputs[0], xla_grad_input)
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
@@ -320,9 +342,8 @@ class TestAvgPoolGrad(TestCase):
                 return F.avg_pool2d(x, 2, stride=1)
 
         model = AvgPoolGrad()
-        x = torch.randn(4, 1, 28, 28, requires_grad=True)
-        grad_outputs = [torch.randn(4, 1, 27, 27)] # random grad_output
-        self.checkGrad(model, x, grad_outputs)
+        inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
+        self.checkGrad(model, inputs)
 
     def test_threshold(self):
         class ThresholdPoolGrad(nn.Module):
@@ -334,10 +355,18 @@ class TestAvgPoolGrad(TestCase):
                 return self.threshold(x)
 
         model = ThresholdPoolGrad()
-        x = torch.randn(4, 2, requires_grad=True)
-        grad_outputs = [torch.randn(4, 2)] # random grad_output
-        self.checkGrad(model, x, grad_outputs)
+        inputs = [torch.randn(4, 2, requires_grad=True)]
+        self.checkGrad(model, inputs)
 
+
+    def test_maxpool(self):
+        class MaxPoolGrad(nn.Module):
+            def forward(self, x):
+                return F.max_pool2d(x, 2)
+
+        model = MaxPoolGrad()
+        inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
+        self.checkGrad(model, inputs)
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
