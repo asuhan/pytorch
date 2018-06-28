@@ -107,6 +107,8 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
         return {grads.at(0) * (1 - outputs.at(0) * outputs.at(0))};
       case aten::relu:
         return {grads.at(0) * (outputs.at(0) > at::Scalar(0)).type_as(outputs.at(0))};
+      case aten::threshold:
+        return {grads.at(0) * (outputs.at(0) > at::Scalar(node->t(attr::threshold))).type_as(outputs.at(0))};
       case aten::exp:
         return {grads.at(0) * (outputs.at(0))};
       case aten::chunk:
