@@ -680,6 +680,41 @@ xla::XlaOp build_batch_norm(
       b->BatchNormTraining(input, weight, bias, eps, 1), 0);
 }
 
+xla::XlaOp build_compare_op(
+    const Node* node,
+    const xla::XlaOp& operand,
+    xla::XlaBuilder* b) {
+  const float other = float_attr(node, attr::other);
+  const auto other_literal = xla::Literal::CreateR0<float>(other);
+  const auto xla_other = b->ConstantLiteral(*other_literal);
+  xla::XlaOp pred;
+  switch (node->kind()) {
+    case aten::gt: {
+      pred = b->Gt(operand, xla_other);
+      break;
+    }
+    default:
+      LOG(FATAL) << "Invalid binary operator kind: " << node->kind();
+  }
+  return b->ConvertElementType(pred, xla::PrimitiveType::S8);
+}
+
+at::optional<xla::XlaOp> build_type_as(
+    const Node* node,
+    const xla::XlaOp& operand,
+    xla::XlaBuilder* b) {
+  const auto node_outputs = node->outputs();
+  CHECK_EQ(node_outputs.size(), 1);
+  const auto output_tensor_type = node_outputs[0]->type()->cast<TensorType>();
+  CHECK(output_tensor_type);
+  const auto target_type_maybe =
+      make_xla_primitive_type(output_tensor_type->scalarType());
+  if (!target_type_maybe) {
+    return at::nullopt;
+  }
+  return b->ConvertElementType(operand, *target_type_maybe);
+}
+
 at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
     const size_t input_index,
@@ -769,6 +804,29 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::gt: {
+        if (node->inputs().size() != 2) {
+          LOG(INFO) << "Unsupported arity";
+          return at::nullopt;
+        }
+        xla::XlaOp xla_output = build_compare_op(node, *XLA_OP(0), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::type_as: {
+        CHECK_EQ(node->inputs().size(), 2);
+        const auto xla_output_maybe = build_type_as(node, *XLA_OP(0), &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
         break;
       }
