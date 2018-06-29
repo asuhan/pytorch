@@ -326,7 +326,7 @@ class TestAvgPoolGrad(TestCase):
             grad_inputs = [grad_inputs]
 
         # backward with XLA
-        traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
+        traced_backward = torch._C._to_xla_module_grad(gradient.df)
         xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
@@ -414,7 +414,7 @@ class TestAvgPoolGrad(TestCase):
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
         # backward with XLA
-        traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
+        traced_backward = torch._C._to_xla_module_grad(gradient.df)
         xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
