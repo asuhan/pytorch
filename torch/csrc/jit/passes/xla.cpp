@@ -26,12 +26,8 @@ std::shared_ptr<XlaModule> ToXLA(script::Module& module) {
   return std::make_shared<XlaModule>(method->graph(), model_parameters);
 }
 
-std::shared_ptr<XlaModule> ToXLAGrad(
-    script::Module& module,
-    std::shared_ptr<Graph> graph) {
-  std::vector<at::Tensor> model_parameters;
-  gather_parameters(model_parameters, module);
-  return std::make_shared<XlaModule>(graph, model_parameters);
+std::shared_ptr<XlaModule> ToXLAGrad(std::shared_ptr<Graph> graph) {
+  return std::make_shared<XlaModule>(graph, std::vector<at::Tensor>{});
 }
 
 } // namespace jit

@@ -331,7 +331,7 @@ class TestGradients(TestCase):
 
         # backward with XLA
         if xla:
-            traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
+            traced_backward = torch._C._to_xla_module_grad(gradient.df)
             xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
