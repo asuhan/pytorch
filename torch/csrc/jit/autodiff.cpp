@@ -20,7 +20,7 @@ bool isDifferentiable(Node * n) {
     aten::add, aten::sub, aten::mul, prim::Constant, prim::ReplaceIfUndef,
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
-    aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd
+    aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, aten::batch_norm, prim::AutogradAdd
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -222,6 +222,22 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                                                       node->i(attr::ceil_mode),
                                                       node->i(attr::count_include_pad))};
       }
+      case aten::batch_norm: {
+        const auto save_mean_undef = SymbolicVariable::create(
+            prim::Undefined, {}, 1, nullptr, node->owningGraph());
+        const auto save_std_undef = SymbolicVariable::create(
+            prim::Undefined, {}, 1, nullptr, node->owningGraph());
+        return {SymbolicVariable::batch_norm_backward(grads.at(0),
+                                                      inputs.at(0),
+                                                      inputs.at(1),
+                                                      inputs.at(3),
+                                                      inputs.at(4),
+                                                      node->i(attr::training),
+                                                      node->f(attr::eps),
+                                                      save_mean_undef[0],
+                                                      save_std_undef[0],
+                                                      {false, false, false})};
+      }
     }
     throw std::runtime_error(std::string("don't support differentiation of `") +
                             node->kind().toDisplayString() + "`");
@@ -360,7 +376,7 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
     if (!outputRequiresGrad(node, requires_grad)) continue;
 
     value_list grad_inputs = linearGradientForNode(node, fmap(node->outputs(), get_grad));
-    JIT_ASSERT(grad_inputs.size() == node->inputs().size());
+    JIT_ASSERT(grad_inputs.size() <= node->inputs().size());
     for (size_t i = 0, num_inputs = grad_inputs.size(); i < num_inputs; ++i) {
       set_grad(inputs[i], grad_inputs[i]);
     }

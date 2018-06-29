@@ -249,6 +249,26 @@ struct SymbolicVariable {
     n->i_(attr::count_include_pad, count_include_pad);
     return r;
   }
+  static SymbolicVariable batch_norm_backward(const SymbolicVariable grad,
+                                              const SymbolicVariable input,
+                                              const SymbolicVariable weight,
+                                              const SymbolicVariable running_mean,
+                                              const SymbolicVariable running_var,
+                                              const bool training,
+                                              const double eps,
+                                              const SymbolicVariable save_mean,
+                                              const SymbolicVariable save_std,
+                                              const std::array<bool, 3> output_mask) {
+    Node *n;
+    auto r = create(aten::batch_norm_backward,
+        {grad, input, weight, running_mean, running_var, save_mean, save_std}, 1, &n)[0];
+    n->i_(attr::training, training);
+    n->f_(attr::eps, eps);
+    std::vector<int64_t> output_mask_intlist;
+    std::copy(output_mask.begin(), output_mask.end(), std::back_inserter(output_mask_intlist));
+    n->is_(attr::output_mask, output_mask_intlist);
+    return r;
+  }
 private:
   SymbolicVariable typeLike(SymbolicVariable other) {
     if (auto other_type = other.v->type()->cast<TensorType>())

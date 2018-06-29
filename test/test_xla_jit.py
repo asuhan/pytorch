@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import unittest
 from common import TestCase, run_tests
 
 
@@ -373,6 +374,73 @@ class TestAvgPoolGrad(TestCase):
         model = MaxPoolGrad()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
         self.checkGrad(model, inputs)
+
+
+    def checkGradBatchnorm(self, model, inputs, num_features, grad_outputs='random'):
+        traced_model = torch.jit.trace(*inputs)(model)
+        fwd = traced_model._get_method('forward')
+        _forward_passes(fwd.graph)
+
+        inputs += [torch.ones(num_features), torch.ones(num_features), torch.ones(num_features),
+            torch.ones(num_features), torch.ones(num_features, dtype=torch.long)]
+        inputs_require_grad = [i.requires_grad for i in inputs]
+
+        gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
+        _forward_passes(gradient.f)
+        _backward_passes(gradient.df)
+
+        exec_f = torch._C.GraphExecutor(gradient.f, False)
+
+        # forward function
+        raw_outputs = exec_f(*inputs)
+
+        if isinstance(raw_outputs, torch.Tensor):
+            raw_outputs = [raw_outputs]
+
+        if grad_outputs == 'random':
+            grad_outputs = []
+            for o in raw_outputs:
+                if o.dtype == torch.float32 or o.dtype == torch.float64:
+                    grad_outputs += [torch.randn(*o.shape, dtype=o.dtype)]
+                elif o.dtype == torch.int64:
+                    # TODO remove this, we shouldn't be needing to pass grad_output for long types
+                    grad_outputs += [torch.empty_like(o)]
+                else:
+                    raise RuntimeError("Unsupported type: ", o.dtype)
+
+        raw_grad_outputs = []
+        raw_grad_outputs += grad_outputs
+        raw_grad_outputs += [inputs[i] for i in gradient.df_input_captured_inputs]
+        raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
+
+        # backward with XLA
+        traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
+        xla_grad_input = traced_backward(*raw_grad_outputs)
+
+        # forward + backward with regular autograd / torch
+        out_groundtruth = model(inputs[0])
+        out_groundtruth.backward(grad_outputs[0]) # TODO: generalize it to *grad_outputs
+        self.assertEqual(xla_grad_input, inputs[0].grad)
+
+
+    @unittest.skip("Batchnorm grad not working yet")
+    def test_batchnorm(self):
+        class BatchNormPoolGrad(nn.Module):
+            def __init__(self, training, num_features):
+                super(BatchNormPoolGrad, self).__init__()
+                if training:
+                  self.bn = nn.BatchNorm2d(num_features)
+                else:
+                  self.bn = nn.BatchNorm2d(num_features, track_running_stats=False)
+
+            def forward(self, x):
+                return self.bn(x)
+
+        num_features = 1
+        model = BatchNormPoolGrad(True, num_features)
+        inputs = [torch.randn(1, num_features, 3, 4, requires_grad=True)]
+        self.checkGradBatchnorm(model, inputs, num_features)
+
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')

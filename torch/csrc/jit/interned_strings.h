@@ -71,6 +71,7 @@ _(prim, AnyDefined)
 
 #define FORALL_ATEN_EXTRA_SYMBOLS(_) \
 _(aten, __not__) \
+_(aten, batch_norm_backward) \
 /* end */
 
 #define FORALL_ATEN_SYMBOLS(_) \

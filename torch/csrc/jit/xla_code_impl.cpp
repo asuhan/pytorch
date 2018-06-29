@@ -675,6 +675,20 @@ xla::XlaOp build_batch_norm(
       b->BatchNormTraining(input, weight, bias, eps, 1), 0);
 }
 
+xla::XlaOp build_batch_norm_backward(
+    const Node* node,
+    const xla::XlaOp& grad,
+    const xla::XlaOp& input,
+    const xla::XlaOp& weight,
+    const xla::XlaOp& running_mean,
+    const xla::XlaOp& running_var,
+    xla::XlaBuilder* b) {
+  const auto eps = node->f(attr::eps);
+  return b->GetTupleElement(
+      b->BatchNormGrad(input, weight, running_mean, running_var, grad, eps, 1),
+      0);
+}
+
 xla::XlaOp build_compare_op(
     const Node* node,
     const xla::XlaOp& operand,
@@ -972,6 +986,21 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK_EQ(node->inputs().size(), 5);
         xla::XlaOp xla_output =
             build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::batch_norm_backward: {
+        CHECK_EQ(node->inputs().size(), 7);
+        xla::XlaOp xla_output = build_batch_norm_backward(
+            node,
+            *XLA_OP(0),
+            *XLA_OP(1),
+            *XLA_OP(2),
+            *XLA_OP(3),
+            *XLA_OP(4),
+            &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
