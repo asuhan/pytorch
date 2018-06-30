@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import unittest
 from common import TestCase, run_tests
 
 
@@ -381,8 +380,20 @@ class TestAvgPoolGrad(TestCase):
         fwd = traced_model._get_method('forward')
         _forward_passes(fwd.graph)
 
-        inputs += [torch.ones(num_features), torch.ones(num_features), torch.ones(num_features),
-            torch.ones(num_features), torch.ones(num_features, dtype=torch.long)]
+        model_weight = torch.tensor(model.bn.weight.data)
+
+        orig_inputs = inputs + [
+            model_weight,
+            torch.ones(num_features),
+            torch.tensor([-0.0775677264]),
+            torch.tensor([0.7578986579769412]),
+            torch.ones(num_features, dtype=torch.long)
+        ]
+        inputs += [model_weight,
+            torch.ones(num_features),
+            torch.tensor([-0.0775677264]),
+            torch.tensor([0.7578986579769412]),
+            torch.ones(num_features, dtype=torch.long)]
         inputs_require_grad = [i.requires_grad for i in inputs]
 
         gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
@@ -410,7 +421,7 @@ class TestAvgPoolGrad(TestCase):
 
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
-        raw_grad_outputs += [inputs[i] for i in gradient.df_input_captured_inputs]
+        raw_grad_outputs += [orig_inputs[i] for i in gradient.df_input_captured_inputs]
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
         # backward with XLA
@@ -418,12 +429,12 @@ class TestAvgPoolGrad(TestCase):
         xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
+        model.bn.reset_running_stats()
         out_groundtruth = model(inputs[0])
         out_groundtruth.backward(grad_outputs[0]) # TODO: generalize it to *grad_outputs
         self.assertEqual(xla_grad_input, inputs[0].grad)
 
 
-    @unittest.skip("Batchnorm grad not working yet")
     def test_batchnorm(self):
         class BatchNormPoolGrad(nn.Module):
             def __init__(self, training, num_features):
@@ -436,6 +447,7 @@ class TestAvgPoolGrad(TestCase):
             def forward(self, x):
                 return self.bn(x)
 
+        torch.manual_seed(42)
         num_features = 1
         model = BatchNormPoolGrad(True, num_features)
         inputs = [torch.randn(1, num_features, 3, 4, requires_grad=True)]
