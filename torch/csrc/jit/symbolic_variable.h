@@ -194,6 +194,13 @@ struct SymbolicVariable {
     n->i_(a("dim"), dim);
     return r;
   }
+  SymbolicVariable transpose(int dim0, int dim1) const {
+    Node *n;
+    auto r =  create(t("transpose"), {*this}, 1, &n)[0];
+    n->i_(a("dim0"), dim0)
+     ->i_(a("dim1"), dim1);
+    return r;
+  }
   SymbolicVariable unsqueeze(int dim) const {
     Node * n;
     auto r = create(t("unsqueeze"), {*this}, 1, &n)[0];
@@ -247,6 +254,25 @@ struct SymbolicVariable {
     n->is_(attr::padding, padding);
     n->i_(attr::ceil_mode, ceil_mode);
     n->i_(attr::count_include_pad, count_include_pad);
+    return r;
+  }
+  static SymbolicVariable convolution(const SymbolicVariable input,
+				      const SymbolicVariable weight,
+				      const SymbolicVariable bias,
+				      const std::vector<int64_t>& stride,
+				      const std::vector<int64_t>& padding,
+				      const std::vector<int64_t>& dilation,
+				      int transposed,
+				      const std::vector<int64_t>& output_padding,
+				      int groups) {
+    Node *n;
+    auto r = create(aten::convolution, {input, weight, bias}, 1, &n)[0];
+    n->is_(attr::stride, stride);
+    n->is_(attr::padding, padding);
+    n->is_(attr::dilation, dilation);
+    n->i_(attr::transposed, transposed);
+    n->is_(attr::output_padding, output_padding);
+    n->i_(attr::groups, groups);
     return r;
   }
 private:

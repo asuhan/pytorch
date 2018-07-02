@@ -40,7 +40,7 @@ MANUAL_IMPLEMENTATIONS = {
 # on demand.  Only concrete ATen methods can be disabled this way; it will have
 # NO EFFECT otherwise.
 DONT_RECORD_TRACE = {
-    'convolution', 'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d',
+    'convolution', '_convolution', '_convolution_nogroup', 'thnn_conv2d', 'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d',
     'conv_transpose2d', 'conv_transpose3d',
 }
 
