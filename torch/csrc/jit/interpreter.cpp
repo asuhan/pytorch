@@ -750,6 +750,13 @@ struct CodeImpl {
         std::cout << std::endl;
         return 0;
       };
+    IR_ELSEIF(NewEmptyTensorLike)
+      return [](Stack & stack) {
+      auto t = peek(stack, 0, 1);
+      drop(stack, 1);
+      stack.push_back(t.type().tensor());
+      return 0;
+    }
     IR_ELSEIF(GraphExecutor)
       auto executor = std::make_shared<GraphExecutor>(value->g(attr::Subgraph));
       graph_executors.emplace_back(executor.get());

@@ -44,6 +44,7 @@ _(prim, JumpNZ) /* debug */ \
 _(prim, JumpZ) /* debug */ \
 _(prim, Load) \
 _(prim, Loop) \
+_(prim, NewEmptyTensorLike) \
 _(prim, Param) \
 _(prim, PackPadded) /* onnx */ \
 _(prim, PadPacked) /* onnx */ \
