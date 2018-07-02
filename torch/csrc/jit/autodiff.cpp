@@ -46,7 +46,8 @@ bool isDifferentiable(Node * n) {
     "aten::eq(Tensor self, Tensor other) -> Tensor",
     "aten::ne(Tensor self, Tensor other) -> Tensor",
     "aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor",
-    "aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)"
+    "aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)",
+    "aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)"
   };
 
   if (n->kind() == prim::Constant || n->kind() == prim::AutogradAdd)
@@ -359,6 +360,23 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                                                                  dilation,
                                                                  ceil_mode),
                                                                  nullptr, nullptr, nullptr, nullptr, nullptr};
+
+    } else if (node->matches("aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)")) {
+      auto graph = node->owningGraph();
+      auto convNode = graph->create(aten::thnn_conv2d_backward, 3);
+      auto f = grads.at(0);
+      convNode->addInput(f);
+      convNode->addInput(inputs.at(0));
+      convNode->addInput(inputs.at(1));
+      convNode->addInput(graph->insertConstant(int_list_attr(node, attr::kernel_size)));
+      convNode->addInput(graph->insertConstant(int_list_attr(node, attr::stride)));
+      convNode->addInput(graph->insertConstant(int_list_attr(node, attr::padding)));
+      convNode->addInput(outputs.at(1));
+      convNode->addInput(outputs.at(2));
+      convNode->addInput(graph->insertConstant(std::vector<int64_t>{1, 1, 1}));
+      graph->insertNode(convNode);
+      return fmap<SymbolicVariable>(convNode->outputs());
+
     } else if (node->kind() == prim::Constant) {
       return {};
     }
