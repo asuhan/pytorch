@@ -20,7 +20,8 @@ bool isDifferentiable(Node * n) {
     aten::add, aten::sub, aten::mul, prim::Constant, prim::ReplaceIfUndef,
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
-    aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd
+    aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd,
+    aten::thnn_conv2d_forward
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -127,23 +128,25 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       case aten::mm: {
         SymbolicVariable dmat1, dmat2;
         if (auto type = inputs.at(0).value()->type()->cast<TensorType>()) {
+	  // if sizes are statically known, optimize transposes
           auto sizes = type->sizes(), strides = type->strides();
           if (strides.at(0) == 1 && strides.at(1) == sizes.at(0)) {
             dmat1 = inputs.at(1).mm(grads.at(0).t()).t();
-          } else {
+          } else { // sizes are not statically known, do generic matrix multiply
             dmat1 = grads.at(0).mm(inputs.at(1).t());
           }
         } else {
           dmat1 = grads.at(0).mm(inputs.at(1).t());
         }
         if (auto type = inputs.at(1).value()->type()->cast<TensorType>()) {
+	  // if sizes are statically known, optimize transposes
           auto sizes = type->sizes(), strides = type->strides();
           if (strides.at(0) == 1 && strides.at(1) == sizes.at(0)) {
             dmat2 = grads.at(0).t().mm(inputs.at(0)).t();
           } else {
             dmat2 = inputs.at(0).t().mm(grads.at(0));
           }
-        } else {
+        } else { // sizes are not statically known, do generic matrix multiply
           dmat2 = inputs.at(0).t().mm(grads.at(0));
         }
         return {dmat1, dmat2};
@@ -221,6 +224,22 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                                                       node->is(attr::padding),
                                                       node->i(attr::ceil_mode),
                                                       node->i(attr::count_include_pad))};
+      }
+      case aten::thnn_conv2d_forward: {
+	auto graph = node->owningGraph();
+	auto convNode = graph->create(aten::thnn_conv2d_backward, 3)
+	  ->is_(attr::stride, node->is(attr::stride))
+	  ->is_(attr::padding, node->is(attr::padding))
+	  ->is_(attr::kernel_size, node->is(attr::kernel_size))
+	  ->is_(attr::output_mask, std::vector<int64_t>{1, 1, 1});
+	auto f = grads.at(0);
+	convNode->addInput(f);
+	convNode->addInput(inputs.at(0));
+	convNode->addInput(inputs.at(1));
+	convNode->addInput(outputs.at(1));
+	convNode->addInput(outputs.at(2));
+	graph->insertNode(convNode);
+	return fmap<SymbolicVariable>(convNode->outputs());
       }
     }
     throw std::runtime_error(std::string("don't support differentiation of `") +
