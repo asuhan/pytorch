@@ -11,6 +11,7 @@ def _xla_run(model, input):
 
 def _forward_passes(graph):
     torch._C._jit_pass_decompose_addmm(graph)
+    torch._C._jit_pass_convolution_unwrap(graph)
     torch._C._jit_pass_dce(graph)
 
 
@@ -282,14 +283,16 @@ class TestMNIST(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
-class TestAvgPoolGrad(TestCase):
+class TestGradients(TestCase):
 
-    def checkGrad(self, model, inputs, grad_outputs='random'):
+    def checkGrad(self, model, inputs, grad_outputs='random', xla=True):
+        inputs_params = inputs + list(model.parameters())
+
         traced_model = torch.jit.trace(*inputs)(model)
         fwd = traced_model._get_method('forward')
         _forward_passes(fwd.graph)
 
-        inputs_require_grad = [i.requires_grad for i in inputs]
+        inputs_require_grad = [i.requires_grad for i in inputs_params]
         gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
         _forward_passes(gradient.f)
         _backward_passes(gradient.df)
@@ -298,7 +301,7 @@ class TestAvgPoolGrad(TestCase):
         exec_df = torch._C.GraphExecutor(gradient.df, False)
 
         # forward function
-        raw_outputs = exec_f(*inputs)
+        raw_outputs = exec_f(*inputs_params)
 
         if isinstance(raw_outputs, torch.Tensor):
             raw_outputs = [raw_outputs]
@@ -317,7 +320,7 @@ class TestAvgPoolGrad(TestCase):
 
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
-        raw_grad_outputs += [inputs[i] for i in gradient.df_input_captured_inputs]
+        raw_grad_outputs += [inputs_params[i] for i in gradient.df_input_captured_inputs]
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
         grad_inputs = exec_df(*raw_grad_outputs)
@@ -325,15 +328,17 @@ class TestAvgPoolGrad(TestCase):
             grad_inputs = [grad_inputs]
 
         # backward with XLA
-        traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
-        xla_grad_input = traced_backward(*raw_grad_outputs)
+        if xla:
+            traced_backward = torch._C._to_xla_module_grad(traced_model, gradient.df)
+            xla_grad_input = traced_backward(*raw_grad_outputs)
 
         # forward + backward with regular autograd / torch
         out_groundtruth = model(*inputs)
         out_groundtruth.backward(grad_outputs[0]) # TODO: generalize it to *grad_outputs
         self.assertEqual(outputs[0], out_groundtruth)
         self.assertEqual(grad_inputs[0], inputs[0].grad)
-        self.assertEqual(grad_inputs[0], xla_grad_input)
+        if xla:
+            self.assertEqual(grad_inputs[0], xla_grad_input)
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
@@ -373,6 +378,16 @@ class TestAvgPoolGrad(TestCase):
         model = MaxPoolGrad()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
         self.checkGrad(model, inputs)
+
+    def test_conv2d(self):
+        for ichans in [1, 15, 32]:
+            for ochans in [1, 13, 32]:
+                for size in [1, 2, 3]:
+                    for stride in [1, 2]:
+                        for padding in [0, 1]:
+                            model = nn.Conv2d(ichans, ochans, size, stride, padding)
+                            inputs = [torch.randn(4, ichans, 28, 28, requires_grad=True)]
+                            self.checkGrad(model, inputs, xla=False)
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')

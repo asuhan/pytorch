@@ -198,7 +198,6 @@ xla::XlaOp build_convolution(
   const auto window_strides = xla_i64_list(node->is(attr::stride));
   const auto dims_padding = make_padding(node);
   const auto node_outputs = node->outputs();
-  CHECK_EQ(node_outputs.size(), 1);
   return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
 }
 
@@ -209,10 +208,9 @@ xla::XlaOp build_convolution_bias(
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
-  CHECK_EQ(node_inputs.size(), 3);
+  CHECK_EQ(node_inputs.size(), 3); // input, weight, bias
   const auto bias_size = tensor_sizes(node_inputs[2]);
   const auto node_outputs = node->outputs();
-  CHECK_EQ(node_outputs.size(), 1);
   auto broadcast_sizes = xla_i64_list(tensor_sizes(node_outputs[0]));
   CHECK_EQ(broadcast_sizes.size(), 4);
   // Remove the channels dimension.
@@ -826,7 +824,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK(it_ok.second);
         break;
       }
-      case aten::_convolution: {
+      case aten::convolution:
+      case aten::thnn_conv2d_forward: {
         if (node->inputs().size() != 3) {
           LOG(INFO) << "Unsupported convolution";
           return at::nullopt;
