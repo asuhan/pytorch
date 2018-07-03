@@ -393,11 +393,8 @@ class TestGradients(TestCase):
     def test_batchnorm2d(self):
         for chans in [1, 15, 32]:
             for eps in [1e-5, 1e-3, 1e-2]:
-                for mom in [0.9, 0.5, 0.1]:
-                    for training in [True, False]:
-                        for affine in [True, False]:
                             # TODO: momentum, training, affine
-                            model = nn.BatchNorm2d(chans, eps=eps, momentum=mom)
+                            model = nn.BatchNorm2d(chans, eps=eps)
                             inputs = [torch.randn(4, chans, 28, 28, requires_grad=True)]
                             self.checkGrad(model, inputs, xla=False)
 
