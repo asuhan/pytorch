@@ -11,7 +11,7 @@ def _xla_run(model, input):
 
 def _forward_passes(graph):
     torch._C._jit_pass_decompose_addmm(graph)
-    torch._C._jit_pass_convolution_unwrap(graph)
+    torch._C._jit_pass_unwrap_buffered_functions(graph)
     torch._C._jit_pass_dce(graph)
 
 

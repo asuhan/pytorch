@@ -3,11 +3,11 @@
 
 namespace torch { namespace jit {
 
-static void ConvolutionUnwrap(Block* block) {
+static void UnwrapBufferedFunctions(Block* block) {
   for (auto it = block->nodes().begin(), end = block->nodes().end(); it != end;
        ++it) {
     for (auto sub : it->blocks())
-      ConvolutionUnwrap(sub);
+      UnwrapBufferedFunctions(sub);
     if (it->kind() == aten::convolution) {
       WithInsertPoint guard(*it);
 
@@ -26,12 +26,28 @@ static void ConvolutionUnwrap(Block* block) {
       convNode->outputs()[0]->setType(it->outputs()[0]->type());
       it->output()->replaceAllUsesWith(convNode->outputs()[0]);
       it.destroyCurrent();
+    } else if (it->kind() == aten::batch_norm) {
+      WithInsertPoint guard(*it);
+      auto graph = block->owningGraph();
+      auto node = *it;
+      auto bnNode = graph->create(aten::thnn_batch_norm_forward, 3)
+	->i_(attr::training, node->i(attr::training))
+	->f_(attr::momentum, node->f(attr::momentum))
+	->f_(attr::eps, node->f(attr::eps));
+      
+      graph->insertNode(bnNode);
+      for (auto input: node->inputs()) {
+	bnNode->addInput(input);
+      }
+      bnNode->outputs()[0]->setType(it->outputs()[0]->type());
+      it->output()->replaceAllUsesWith(bnNode->outputs()[0]);
+      it.destroyCurrent();      
     }
   }
 }
 
-void ConvolutionUnwrap(const std::shared_ptr<Graph>& graph) {
-  ConvolutionUnwrap(graph->block());
+void UnwrapBufferedFunctions(const std::shared_ptr<Graph>& graph) {
+  UnwrapBufferedFunctions(graph->block());
 }
 
 

@@ -21,7 +21,7 @@ bool isDifferentiable(Node * n) {
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
     aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd,
-    aten::thnn_conv2d_forward
+    aten::thnn_conv2d_forward, aten::thnn_batch_norm_forward
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -232,14 +232,31 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
 	  ->is_(attr::padding, node->is(attr::padding))
 	  ->is_(attr::kernel_size, node->is(attr::kernel_size))
 	  ->is_(attr::output_mask, std::vector<int64_t>{1, 1, 1});
-	auto f = grads.at(0);
-	convNode->addInput(f);
+	auto grad_out = grads.at(0);
+	convNode->addInput(grad_out);
 	convNode->addInput(inputs.at(0));
 	convNode->addInput(inputs.at(1));
 	convNode->addInput(outputs.at(1));
 	convNode->addInput(outputs.at(2));
 	graph->insertNode(convNode);
 	return fmap<SymbolicVariable>(convNode->outputs());
+      }
+      case aten::thnn_batch_norm_forward: {
+	auto graph = node->owningGraph();
+	auto bnNode = graph->create(aten::thnn_batch_norm_backward, 3)
+	                   ->f_(attr::eps, node->f(attr::eps))
+	                   ->i_(attr::training, node->i(attr::training))
+	                   ->is_(attr::output_mask, std::vector<int64_t>{1, 1, 1});
+	auto grad_out = grads.at(0);
+	bnNode->addInput(grad_out);
+	bnNode->addInput(inputs.at(0));
+	bnNode->addInput(inputs.at(1));
+	bnNode->addInput(inputs.at(3));
+	bnNode->addInput(inputs.at(4));
+	bnNode->addInput(outputs.at(1));
+	bnNode->addInput(outputs.at(2));
+	graph->insertNode(bnNode);
+	return fmap<SymbolicVariable>(bnNode->outputs());
       }
     }
     throw std::runtime_error(std::string("don't support differentiation of `") +
@@ -379,7 +396,7 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
     if (!outputRequiresGrad(node, requires_grad)) continue;
 
     value_list grad_inputs = linearGradientForNode(node, fmap(node->outputs(), get_grad));
-    JIT_ASSERT(grad_inputs.size() == node->inputs().size());
+    JIT_ASSERT(grad_inputs.size() <= node->inputs().size());
     for (size_t i = 0, num_inputs = grad_inputs.size(); i < num_inputs; ++i) {
       set_grad(inputs[i], grad_inputs[i]);
     }

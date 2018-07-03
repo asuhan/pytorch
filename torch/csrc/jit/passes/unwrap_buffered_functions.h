@@ -4,6 +4,6 @@
 
 namespace torch { namespace jit {
 
-void ConvolutionUnwrap(const std::shared_ptr<Graph>& graph);
+void UnwrapBufferedFunctions(const std::shared_ptr<Graph>& graph);
 
 }}
