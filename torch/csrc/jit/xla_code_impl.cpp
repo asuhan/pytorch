@@ -108,7 +108,24 @@ XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
   EliminateDeadCode(graph_);
 }
 
-at::optional<at::Tensor> XlaCodeImpl::run(
+namespace {
+
+at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
+  const auto result_slice = literal.data<float>();
+  std::vector<int64_t> dimensions;
+  const auto& result_shape = literal.shape();
+  for (const auto result_dimension : result_shape.dimensions()) {
+    dimensions.push_back(result_dimension);
+  }
+  at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
+  std::copy(
+      result_slice.begin(), result_slice.end(), result_tensor.data<float>());
+  return result_tensor;
+}
+
+} // namespace
+
+at::optional<std::vector<at::Tensor>> XlaCodeImpl::run(
     const std::vector<at::Tensor>& inputs) const {
   const auto parameter_shapes = captureInputShapes(inputs);
   if (!parameter_shapes) {
@@ -130,16 +147,15 @@ at::optional<at::Tensor> XlaCodeImpl::run(
     arguments.push_back(data.release());
   }
   auto result_literal = client_.ExecuteComputation(computation, arguments);
-  const auto result_slice = result_literal->data<float>();
-  std::vector<int64_t> dimensions;
-  const auto& result_shape = result_literal->shape();
-  for (const auto result_dimension : result_shape.dimensions()) {
-    dimensions.push_back(result_dimension);
+  if (xla::ShapeUtil::IsTuple(result_literal->shape())) {
+    const auto tuple_elements = result_literal->DecomposeTuple();
+    std::vector<at::Tensor> result_tensors;
+    for (const auto& tuple_element : tuple_elements) {
+      result_tensors.push_back(make_tensor_from_xla_literal(tuple_element));
+    }
+    return result_tensors;
   }
-  at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
-  std::copy(
-      result_slice.begin(), result_slice.end(), result_tensor.data<float>());
-  return result_tensor;
+  return std::vector<at::Tensor>{make_tensor_from_xla_literal(*result_literal)};
 }
 
 at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
@@ -1040,11 +1056,21 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     }
   }
   const auto return_node = graph_->return_node();
-  if (return_node->kind() != prim::Return ||
-      return_node->inputs().size() != 1 ||
-      return_node->input()->unique() != current_unique) {
+  const auto node_inputs = return_node->inputs();
+  // TODO: tighten the id check for returned tuples.
+  if (return_node->kind() != prim::Return || node_inputs.empty() ||
+      node_inputs[0]->unique() != current_unique) {
     LOG(INFO) << "Unexpected end of graph";
     return at::nullopt;
+  }
+  if (node_inputs.size() > 1) {
+    std::vector<xla::XlaOp> returned_tuple;
+    for (const auto return_input : node_inputs) {
+      const auto it = node_xla_ops.find(return_input->unique());
+      CHECK(it != node_xla_ops.end());
+      returned_tuple.push_back(it->second);
+    }
+    b.Tuple(returned_tuple);
   }
   return b.Build().ValueOrDie();
 }
