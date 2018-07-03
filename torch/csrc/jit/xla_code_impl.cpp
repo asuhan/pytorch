@@ -240,13 +240,7 @@ xla::XlaOp build_convolution_bias(
   return b->Add(conv, bias_broadcast);
 }
 
-struct Conv2DGrads {
-  xla::XlaOp grad_input;
-  xla::XlaOp grad_weight;
-  xla::XlaOp grad_bias;
-};
-
-Conv2DGrads build_thnn_conv2d_backward(
+xla::XlaOp build_thnn_conv2d_backward_input(
     const Node* node,
     const xla::XlaOp& grad,
     const xla::XlaOp& input,
@@ -343,9 +337,10 @@ Conv2DGrads build_thnn_conv2d_backward(
 
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
+
   // activation gradients
   //   = gradients (with padding and dilation) <conv> mirrored_weights
-  const auto grad_input = b->Pad(
+  return b->Pad(
       b->ConvGeneralDilated(
           grad,
           mirrored_weights,
@@ -356,8 +351,173 @@ Conv2DGrads build_thnn_conv2d_backward(
           dnums),
       xla_zero,
       padding_config);
+}
+
+xla::XlaOp build_thnn_conv2d_backward_weight(
+    const Node* node,
+    const xla::XlaOp& grad,
+    const xla::XlaOp& input,
+    const xla::XlaOp& weight,
+    const xla::XlaOp& finput,
+    const xla::XlaOp& fweight,
+    xla::XlaBuilder* b) {
+  constexpr int n_dim = 0;
+  constexpr int c_dim = 1;
+  const auto node_inputs = node->inputs();
+  CHECK_EQ(node_inputs.size(), 9);
+  const auto padding_attr = int_list_attr(node, attr::padding);
+  CHECK_EQ(padding_attr.size(), 2);
+  // Adjust input size to account for specified padding.
+  auto input_size = tensor_sizes(node_inputs[1]);
+  for (int i = 0; i < 2; ++i) {
+    input_size[2 + i] += 2 * padding_attr[i];
+  }
+  tensorflow::TensorShape activations_shape(xla_i64_list(input_size));
+  const auto filter_size = xla_i64_list(tensor_sizes(node_inputs[2]));
+  std::vector<int64> filter_size_backward{
+      filter_size[2], filter_size[3], filter_size[1], filter_size[0]};
+  tensorflow::TensorShape filter_shape(filter_size_backward);
+  tensorflow::TensorShape out_backprop_shape(
+      xla_i64_list(tensor_sizes(node_inputs[0])));
+  const auto stride_attr = int_list_attr(node, attr::stride);
+  std::vector<int> strides{1, 1};
+  std::copy(
+      stride_attr.begin(), stride_attr.end(), std::back_inserter(strides));
+  tensorflow::ConvBackpropDimensions dims;
+  constexpr int num_spatial_dims = 2;
+  std::vector<int> dilations{1, 1, 1, 1};
+  const auto status = ConvBackpropComputeDimensionsV2(
+      "thnn_conv2d_backward",
+      num_spatial_dims,
+      activations_shape,
+      filter_shape,
+      out_backprop_shape,
+      dilations,
+      strides,
+      tensorflow::Padding::VALID,
+      tensorflow::TensorFormat::FORMAT_NCHW,
+      &dims);
+  CHECK(status.ok()) << status.error_message();
+
+  // The filter gradients are computed by a convolution of the input
+  // activations and the output gradients, with some appropriate padding.
+  // See the comment at the top of conv_grad_ops.h for details.
+
+  xla::ConvolutionDimensionNumbers dnums;
+
+  // The activations (inputs) form the LHS of the convolution.
+  // Activations have shape: [batch, in_rows, in_cols, ..., in_depth]
+  // For the gradient computation, we flip the roles of the batch and
+  // feature dimensions.
+  // Each spatial entry has size in_depth * batch
+
+  // Swap n_dim and c_dim in the activations.
+  dnums.set_input_batch_dimension(c_dim);
+  dnums.set_input_feature_dimension(n_dim);
+
+  // The gradients become the RHS of the convolution.
+  // The gradients have shape [batch, out_rows, out_cols, ..., out_depth]
+  // where the batch becomes the input feature for the convolution.
+  dnums.set_kernel_input_feature_dimension(n_dim);
+  dnums.set_kernel_output_feature_dimension(c_dim);
+
+  std::vector<std::pair<int64, int64>> padding(num_spatial_dims);
+  std::vector<int64> rhs_dilation(num_spatial_dims);
+  std::vector<int64> window_strides(num_spatial_dims);
+  std::vector<int64> ones(num_spatial_dims, 1);
+
+  // Tensorflow filter shape is [ H, W, ..., inC, outC ].
+  for (int i = 0; i < num_spatial_dims; ++i) {
+    dnums.add_output_spatial_dimensions(2 + i);
+  }
+  dnums.set_output_batch_dimension(1);
+  dnums.set_output_feature_dimension(0);
+
+  for (int i = 0; i < num_spatial_dims; ++i) {
+    int64 dim = 2 + i;
+    dnums.add_input_spatial_dimensions(dim);
+    dnums.add_kernel_spatial_dimensions(dim);
+
+    // We will also need to pad the input with zeros such that after the
+    // convolution, we get the right size for the filter.
+    // The padded_in_rows should be such that when we convolve this with the
+    // expanded_out_rows as a filter, we should get filter_rows back.
+    //
+    const int64 padded_in_size = dims.spatial_dims[i].expanded_output_size +
+        (dims.spatial_dims[i].filter_size - 1) * dilations[dim];
+
+    // However it can be smaller than input_rows: in this
+    // case it means some of the inputs are not used.
+    //
+    // An example is to have input_cols = 3, filter_cols = 2 and stride = 2:
+    //
+    // INPUT =  [ A  B  C ]
+    //
+    // FILTER = [ x y ]
+    //
+    // and the output will only have one column: a = A * x + B * y
+    //
+    // and input "C" is not used at all.
+    //
+    // We apply negative padding in this case.
+    const int64 pad_total = padded_in_size - dims.spatial_dims[i].input_size;
+
+    // Pad the bottom/right side with the remaining space.
+    const int64 pad_before = 0;
+
+    padding[i] = {pad_before, pad_total - pad_before};
+    rhs_dilation[i] = dims.spatial_dims[i].stride;
+    window_strides[i] = dilations[dim];
+  }
+
+  // Redo the initial input padding.
+  xla::PaddingConfig padding_config;
+  for (int i = 0; i < 2; ++i) {
+    padding_config.add_dimensions();
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto* dims = padding_config.add_dimensions();
+    dims->set_edge_padding_low(padding_attr[i]);
+    dims->set_edge_padding_high(padding_attr[i]);
+  }
+
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+
+  const auto padded_input = b->Pad(input, xla_zero, padding_config);
+
+  return b->ConvGeneralDilated(
+      padded_input,
+      grad,
+      window_strides,
+      padding,
+      /*lhs_dilation=*/ones,
+      rhs_dilation,
+      dnums);
+}
+
+struct Conv2DGrads {
+  xla::XlaOp grad_input;
+  xla::XlaOp grad_weight;
+  xla::XlaOp grad_bias;
+};
+
+Conv2DGrads build_thnn_conv2d_backward(
+    const Node* node,
+    const xla::XlaOp& grad,
+    const xla::XlaOp& input,
+    const xla::XlaOp& weight,
+    const xla::XlaOp& finput,
+    const xla::XlaOp& fweight,
+    xla::XlaBuilder* b) {
+  const auto grad_input = build_thnn_conv2d_backward_input(
+      node, grad, input, weight, finput, fweight, b);
   // TODO: support weight and bias gradients
-  return {grad_input, xla_zero, xla_zero};
+  const auto grad_weight = build_thnn_conv2d_backward_weight(
+      node, grad, input, weight, finput, fweight, b);
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  return {grad_input, grad_weight, xla_zero};
 }
 
 xla::XlaOp build_addmm(
