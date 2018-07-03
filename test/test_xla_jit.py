@@ -286,7 +286,7 @@ class TestMNIST(TestCase):
 class TestGradients(TestCase):
 
     def checkGrad(self, model, inputs, grad_outputs='random', xla=True):
-        inputs_params = inputs + list(model.parameters())
+        inputs_params = inputs + list(model.parameters()) + list(model._all_buffers())
 
         traced_model = torch.jit.trace(*inputs)(model)
         fwd = traced_model._get_method('forward')
@@ -385,9 +385,22 @@ class TestGradients(TestCase):
                 for size in [1, 2, 3]:
                     for stride in [1, 2]:
                         for padding in [0, 1]:
+                            # TODO: dilation, groups, transpose
                             model = nn.Conv2d(ichans, ochans, size, stride, padding)
                             inputs = [torch.randn(4, ichans, 28, 28, requires_grad=True)]
                             self.checkGrad(model, inputs, xla=False)
+
+    def test_batchnorm2d(self):
+        for chans in [1, 15, 32]:
+            for eps in [1e-5, 1e-3, 1e-2]:
+                for mom in [0.9, 0.5, 0.1]:
+                    for training in [True, False]:
+                        for affine in [True, False]:
+                            # TODO: momentum, training, affine
+                            model = nn.BatchNorm2d(chans, eps=eps, momentum=mom)
+                            inputs = [torch.randn(4, chans, 28, 28, requires_grad=True)]
+                            self.checkGrad(model, inputs, xla=False)
+
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
