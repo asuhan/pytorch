@@ -488,7 +488,12 @@ void initJitScriptBindings(PyObject* module) {
 #ifdef WITH_XLA
   py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule")
     .def("__call__", [](XlaModule& xla_module, py::args args) {
-      return autograd::make_variable(xla_module.run(createTensorList(args)), false);
+      auto outputs = xla_module.run(createTensorList(args));
+      variable_tensor_list result;
+      for (auto output : outputs) {
+        result.push_back(autograd::make_variable(std::move(output), false));
+      }
+      return unpackVariableTensorList(std::move(result));
     });
 #endif  // WITH_XLA
 

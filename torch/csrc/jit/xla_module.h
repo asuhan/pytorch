@@ -16,7 +16,7 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
       const std::vector<at::Tensor>& model_parameters)
       : xla_code_(graph), model_parameters_(model_parameters) {}
 
-  at::Tensor run(const std::vector<at::Tensor>& inputs);
+  std::vector<at::Tensor> run(const std::vector<at::Tensor>& inputs);
 
  private:
   XlaCodeImpl xla_code_;
