@@ -47,7 +47,8 @@ bool isDifferentiable(Node * n) {
     "aten::ne(Tensor self, Tensor other) -> Tensor",
     "aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor",
     "aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)",
-    "aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)"
+    "aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)",
+    "aten::thnn_batch_norm_forward(Tensor self, Tensor weight, Tensor bias, Tensor running_mean, Tensor running_var, int training, float momentum, float eps) -> (Tensor, Tensor, Tensor)"
   };
 
   if (n->kind() == prim::Constant || n->kind() == prim::AutogradAdd)
@@ -386,6 +387,29 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       result.emplace_back();
       return result;
 
+    } else if (node->matches("aten::thnn_batch_norm_forward(Tensor self, Tensor weight, Tensor bias, Tensor running_mean, Tensor running_var, int training, float momentum, float eps) -> (Tensor, Tensor, Tensor)")) {
+      auto graph = node->owningGraph();
+      auto bnNode = graph->create(aten::thnn_batch_norm_backward, 3);
+      auto grad_out = grads.at(0);
+      bnNode->addInput(grad_out);
+      bnNode->addInput(inputs.at(0));
+      bnNode->addInput(inputs.at(1));
+      bnNode->addInput(inputs.at(3));
+      bnNode->addInput(inputs.at(4));
+      bnNode->addInput(inputs.at(5));
+      bnNode->addInput(inputs.at(7));
+      bnNode->addInput(outputs.at(1));
+      bnNode->addInput(outputs.at(2));
+      bnNode->addInput(graph->insertConstant(std::vector<int64_t>{1, 1, 1}));
+      graph->insertNode(bnNode);
+      auto outputs = fmap<SymbolicVariable>(bnNode->outputs());
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      return outputs;
+
     } else if (node->kind() == prim::Constant) {
       return {};
     }
@@ -523,7 +547,7 @@ static ReverseDetails addReverseInline(Gradient& grad_desc,
     if (!outputRequiresGrad(node, requires_grad)) continue;
 
     value_list grad_inputs = linearGradientForNode(node, fmap(node->outputs(), get_grad));
-    JIT_ASSERT(grad_inputs.size() == node->inputs().size());
+    JIT_ASSERT(grad_inputs.size() <= node->inputs().size());
     for (size_t i = 0, num_inputs = grad_inputs.size(); i < num_inputs; ++i) {
       if (!requires_grad(inputs[i])) continue;
       JIT_ASSERT(grad_inputs[i]);

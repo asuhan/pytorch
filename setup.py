@@ -793,7 +793,7 @@ main_sources = [
     "torch/csrc/jit/init.cpp",
     "torch/csrc/jit/ivalue.cpp",
     "torch/csrc/jit/passes/constant_folding.cpp",
-    "torch/csrc/jit/passes/convolution_unwrap.cpp",
+    "torch/csrc/jit/passes/unwrap_buffered_functions.cpp",
     "torch/csrc/jit/passes/onnx.cpp",
     "torch/csrc/jit/passes/onnx/fixup_onnx_loop.cpp",
     "torch/csrc/jit/passes/onnx/peephole.cpp",
