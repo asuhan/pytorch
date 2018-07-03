@@ -396,7 +396,7 @@ class TestGradients(TestCase):
                             # TODO: momentum, training, affine
                             model = nn.BatchNorm2d(chans, eps=eps)
                             inputs = [torch.randn(4, chans, 28, 28, requires_grad=True)]
-                            self.checkGrad(model, inputs, xla=False)
+                            self.checkGrad(model, inputs)
 
 
 if __name__ == '__main__':

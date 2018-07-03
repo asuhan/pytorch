@@ -682,9 +682,7 @@ xla::XlaOp build_batch_norm_backward(
     const xla::XlaOp& running_var,
     xla::XlaBuilder* b) {
   const auto eps = node->f(attr::eps);
-  return b->GetTupleElement(
-      b->BatchNormGrad(input, weight, running_mean, running_var, grad, eps, 1),
-      0);
+  return b->BatchNormGrad(input, weight, running_mean, running_var, grad, eps, 1);
 }
 
 xla::XlaOp build_compare_op(
@@ -986,7 +984,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK_EQ(node->inputs().size(), 5);
         xla::XlaOp xla_output =
             build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
-        current_unique = output_id(node);
+	current_unique = node->outputs()[0]->unique(); // ignore save_mean / save_std
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
@@ -1001,9 +999,19 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
 							  *XLA_OP(3),
 							  *XLA_OP(4),
 							  &b);
-	current_unique = output_id(node);
-	const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
-	CHECK(it_ok.second);
+	auto gi_unique = node->outputs()[0]->unique();
+	auto gw_unique = node->outputs()[1]->unique();
+	auto gb_unique = node->outputs()[2]->unique();
+	auto gi_xla = b.GetTupleElement(xla_output, 0);
+	auto gw_xla = b.GetTupleElement(xla_output, 1);
+	auto gb_xla = b.GetTupleElement(xla_output, 2);
+	const auto it_gi = node_xla_ops.emplace(gi_unique, gi_xla);	
+	CHECK(it_gi.second);
+	const auto it_gw = node_xla_ops.emplace(gw_unique, gw_xla);
+	CHECK(it_gw.second);
+	const auto it_gb = node_xla_ops.emplace(gb_unique, gb_xla);	
+	CHECK(it_gb.second);
+	current_unique = gi_unique;
 	break;
       }
       case prim::Undefined: {
@@ -1016,13 +1024,13 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         return at::nullopt;
     }
   }
-  const auto return_node = graph_->return_node();
-  if (return_node->kind() != prim::Return ||
-      return_node->inputs().size() != 1 ||
-      return_node->input()->unique() != current_unique) {
-    LOG(INFO) << "Unexpected end of graph";
-    return at::nullopt;
-  }
+  // const auto return_node = graph_->return_node();
+  // if (return_node->kind() != prim::Return ||
+  //     return_node->inputs().size() == 1 ||
+  //     return_node->input()->unique() != current_unique) {
+  //   LOG(INFO) << "Unexpected end of graph";
+  //   return at::nullopt;
+  // }
   return b.Build().ValueOrDie();
 }
 
