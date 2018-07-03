@@ -341,6 +341,8 @@ class TestGradients(TestCase):
         self.assertEqual(grad_inputs[0], inputs[0].grad)
         if xla:
             self.assertEqual(grad_inputs[0], xla_grad_inputs[0])
+            if len(xla_grad_inputs) > 1:
+                self.assertEqual(grad_inputs[1], xla_grad_inputs[1], prec=1e-3)
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
