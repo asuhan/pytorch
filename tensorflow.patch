@@ -2,7 +2,7 @@ diff --git a/tensorflow/compiler/xla/rpc/BUILD b/tensorflow/compiler/xla/rpc/BUI
 index 0d56a9a477..fd8353134d 100644
 --- a/tensorflow/compiler/xla/rpc/BUILD
 +++ b/tensorflow/compiler/xla/rpc/BUILD
-@@ -34,6 +34,55 @@ cc_library(
+@@ -34,6 +34,56 @@ cc_library(
      ],
  )
 
@@ -52,6 +52,7 @@ index 0d56a9a477..fd8353134d 100644
 +        "//tensorflow/compiler/xla/client:global_data",
 +        "//tensorflow/compiler/xla/client/xla_client:xla_computation",
 +        "//tensorflow/core:lib",
++        "//tensorflow/core/kernels:conv_ops",
 +    ],
 +)
 +
@@ -197,20 +198,22 @@ diff --git a/tensorflow/tf_exported_symbols.lds b/tensorflow/tf_exported_symbols
 index 3ff824e5e1..39d1728b01 100644
 --- a/tensorflow/tf_exported_symbols.lds
 +++ b/tensorflow/tf_exported_symbols.lds
-@@ -5,3 +5,4 @@
+@@ -5,3 +5,5 @@
  *TFE_*
  *nsync_*
  *pywrap_xla*
 +*xla*
++*ConvBackpropComputeDimensionsV2*
 diff --git a/tensorflow/tf_version_script.lds b/tensorflow/tf_version_script.lds
 index 6b28943f01..76b7454c35 100644
 --- a/tensorflow/tf_version_script.lds
 +++ b/tensorflow/tf_version_script.lds
-@@ -6,6 +6,7 @@ tensorflow {
+@@ -6,6 +6,8 @@ tensorflow {
      *TFE_*;
      *nsync_*;
      *pywrap_xla*;
 +    *xla*;
++    *ConvBackpropComputeDimensionsV2*;
    local:
      *;
  };

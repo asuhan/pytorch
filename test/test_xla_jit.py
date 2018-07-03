@@ -332,7 +332,9 @@ class TestGradients(TestCase):
         # backward with XLA
         if xla:
             traced_backward = torch._C._to_xla_module_grad(gradient.df)
-            xla_grad_input = traced_backward(*raw_grad_outputs)
+            xla_grad_inputs = traced_backward(*raw_grad_outputs)
+            if isinstance(xla_grad_inputs, torch.Tensor):
+                xla_grad_inputs = [xla_grad_inputs]
 
         # forward + backward with regular autograd / torch
         out_groundtruth = model(*inputs)
@@ -340,7 +342,7 @@ class TestGradients(TestCase):
         self.assertEqual(outputs[0], out_groundtruth)
         self.assertEqual(grad_inputs[0], inputs[0].grad)
         if xla:
-            self.assertEqual(grad_inputs[0], xla_grad_input)
+            self.assertEqual(grad_inputs[0], xla_grad_inputs[0])
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
@@ -390,7 +392,7 @@ class TestGradients(TestCase):
                             # TODO: dilation, groups, transpose
                             model = nn.Conv2d(ichans, ochans, size, stride, padding)
                             inputs = [torch.randn(4, ichans, 28, 28, requires_grad=True)]
-                            self.checkGrad(model, inputs, xla=False)
+                            self.checkGrad(model, inputs, xla=True)
 
     def test_batchnorm2d(self):
         for chans in [1, 15, 32]:

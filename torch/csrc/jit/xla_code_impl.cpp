@@ -1,5 +1,6 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/xla_code_impl.h"
+#include "tensorflow/core/kernels/conv_grad_ops.h"
 #include "torch/csrc/jit/autodiff.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
@@ -237,6 +238,126 @@ xla::XlaOp build_convolution_bias(
       b->Transpose(b->Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
   const auto conv = build_convolution(node, lhs, rhs, b);
   return b->Add(conv, bias_broadcast);
+}
+
+struct Conv2DGrads {
+  xla::XlaOp grad_input;
+  xla::XlaOp grad_weight;
+  xla::XlaOp grad_bias;
+};
+
+Conv2DGrads build_thnn_conv2d_backward(
+    const Node* node,
+    const xla::XlaOp& grad,
+    const xla::XlaOp& input,
+    const xla::XlaOp& weight,
+    const xla::XlaOp& finput,
+    const xla::XlaOp& fweight,
+    xla::XlaBuilder* b) {
+  const auto node_inputs = node->inputs();
+  CHECK_EQ(node_inputs.size(), 9);
+  const auto padding_attr = int_list_attr(node, attr::padding);
+  CHECK_EQ(padding_attr.size(), 2);
+  // Adjust input size to account for specified padding.
+  auto input_size = tensor_sizes(node_inputs[1]);
+  for (int i = 0; i < 2; ++i) {
+    input_size[2 + i] += 2 * padding_attr[i];
+  }
+  tensorflow::TensorShape input_shape(xla_i64_list(input_size));
+  const auto filter_size = xla_i64_list(tensor_sizes(node_inputs[2]));
+  std::vector<int64> filter_size_backward{
+      filter_size[2], filter_size[3], filter_size[1], filter_size[0]};
+  tensorflow::TensorShape filter_shape(filter_size_backward);
+  tensorflow::TensorShape out_backprop_shape(
+      xla_i64_list(tensor_sizes(node_inputs[0])));
+  const auto stride_attr = int_list_attr(node, attr::stride);
+  std::vector<int> strides{1, 1};
+  std::copy(
+      stride_attr.begin(), stride_attr.end(), std::back_inserter(strides));
+  tensorflow::ConvBackpropDimensions dims;
+  constexpr int num_spatial_dims = 2;
+  std::vector<int> dilations{1, 1, 1, 1};
+  const auto status = ConvBackpropComputeDimensionsV2(
+      "thnn_conv2d_backward",
+      num_spatial_dims,
+      input_shape,
+      filter_shape,
+      out_backprop_shape,
+      dilations,
+      strides,
+      tensorflow::Padding::VALID,
+      tensorflow::TensorFormat::FORMAT_NCHW,
+      &dims);
+  CHECK(status.ok()) << status.error_message();
+
+  constexpr int batch_dim = 0;
+  constexpr int feature_dim = 1;
+
+  // The input gradients are computed by a convolution of the output
+  // gradients and the filter, with some appropriate padding. See the
+  // comment at the top of conv_grad_ops.h for details.
+
+  xla::ConvolutionDimensionNumbers dnums;
+  dnums.set_input_batch_dimension(batch_dim);
+  dnums.set_output_batch_dimension(batch_dim);
+  dnums.set_input_feature_dimension(feature_dim);
+  dnums.set_output_feature_dimension(feature_dim);
+
+  // TF filter shape is [ H, W, ..., inC, outC ]
+  // Transpose the input and output features for computing the gradient.
+  dnums.set_kernel_input_feature_dimension(0);
+  dnums.set_kernel_output_feature_dimension(1);
+
+  std::vector<int64> kernel_spatial_dims(num_spatial_dims);
+  std::vector<std::pair<int64, int64>> padding(num_spatial_dims);
+  std::vector<int64> lhs_dilation(num_spatial_dims);
+  std::vector<int64> rhs_dilation(num_spatial_dims);
+  std::vector<int64> ones(num_spatial_dims, 1);
+  for (int i = 0; i < num_spatial_dims; ++i) {
+    int64 dim = 2 + i;
+    dnums.add_input_spatial_dimensions(dim);
+    dnums.add_kernel_spatial_dimensions(dim);
+    dnums.add_output_spatial_dimensions(dim);
+
+    kernel_spatial_dims[i] = dim;
+    padding[i] = {dims.spatial_dims[i].pad_before,
+                  dims.spatial_dims[i].pad_after};
+    lhs_dilation[i] = dims.spatial_dims[i].stride;
+    rhs_dilation[i] = dilations[dim];
+  }
+
+  // Mirror the filter in the spatial dimensions.
+  xla::XlaOp mirrored_weights = b->Rev(weight, kernel_spatial_dims);
+
+  // We'll need to undo the initial input padding once on the input backprop
+  // result since edges are constant and have to be discarded for the gradient.
+  xla::PaddingConfig padding_config;
+  for (int i = 0; i < 2; ++i) {
+    padding_config.add_dimensions();
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto* dims = padding_config.add_dimensions();
+    dims->set_edge_padding_low(-padding_attr[i]);
+    dims->set_edge_padding_high(-padding_attr[i]);
+  }
+
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  // activation gradients
+  //   = gradients (with padding and dilation) <conv> mirrored_weights
+  const auto grad_input = b->Pad(
+      b->ConvGeneralDilated(
+          grad,
+          mirrored_weights,
+          /*window_strides=*/ones,
+          padding,
+          lhs_dilation,
+          rhs_dilation,
+          dnums),
+      xla_zero,
+      padding_config);
+  // TODO: support weight and bias gradients
+  return {grad_input, xla_zero, xla_zero};
 }
 
 xla::XlaOp build_addmm(
@@ -891,6 +1012,35 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
+        break;
+      }
+      case aten::thnn_conv2d_backward: {
+        CHECK_EQ(node->inputs().size(), 9);
+        const auto conv2d_grads = build_thnn_conv2d_backward(
+            node,
+            *XLA_OP(0),
+            *XLA_OP(1),
+            *XLA_OP(2),
+            *XLA_OP(6),
+            *XLA_OP(7),
+            &b);
+        const auto node_outputs = node->outputs();
+        {
+          current_unique = node_outputs[0]->unique();
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[0]->unique(), conv2d_grads.grad_input);
+          CHECK(it_ok.second);
+        }
+        {
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[1]->unique(), conv2d_grads.grad_weight);
+          CHECK(it_ok.second);
+        }
+        {
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[2]->unique(), conv2d_grads.grad_bias);
+          CHECK(it_ok.second);
+        }
         break;
       }
       case aten::t: {
