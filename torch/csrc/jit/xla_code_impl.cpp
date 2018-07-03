@@ -992,19 +992,19 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::thnn_batch_norm_backward: {
-	CHECK_EQ(node->inputs().size(), 7);
-	xla::XlaOp xla_output = build_batch_norm_backward(
-							  node,
-							  *XLA_OP(0),
-							  *XLA_OP(1),
-							  *XLA_OP(2),
-							  *XLA_OP(3),
-							  *XLA_OP(4),
-							  &b);
-	current_unique = output_id(node);
-	const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
-	CHECK(it_ok.second);
-	break;
+        CHECK_EQ(node->inputs().size(), 7);
+        xla::XlaOp xla_output = build_batch_norm_backward(
+            node,
+            *XLA_OP(0),
+            *XLA_OP(1),
+            *XLA_OP(2),
+            *XLA_OP(3),
+            *XLA_OP(4),
+            &b);
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
       }
       case prim::Undefined: {
         current_unique = output_id(node);
