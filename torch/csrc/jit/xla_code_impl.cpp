@@ -961,29 +961,46 @@ xla::XlaOp build_stack(
   return b->ConcatInDim(reshaped_inputs, dim);
 }
 
-xla::XlaOp build_batch_norm(
+struct BatchNormOutput {
+  xla::XlaOp output;
+  xla::XlaOp save_mean; // batch_mean
+  xla::XlaOp save_std;  // batch_var
+};
+
+
+BatchNormOutput build_batch_norm(
     const Node* node,
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
   const auto eps = node->f(attr::eps);
-  return b->GetTupleElement(
-      b->BatchNormTraining(input, weight, bias, eps, 1), 0);
+  auto outputs = b->BatchNormTraining(input, weight, bias, eps, 1);
+  return {b->GetTupleElement(outputs, 2),
+      b->GetTupleElement(outputs, 1),
+      b->GetTupleElement(outputs, 0)};
 }
 
-xla::XlaOp build_batch_norm_backward(
+struct BatchNormGrads {
+  xla::XlaOp grad_input;
+  xla::XlaOp grad_weight;
+  xla::XlaOp grad_bias;
+};
+
+BatchNormGrads build_batch_norm_backward(
     const Node* node,
     const xla::XlaOp& grad,
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
-    const xla::XlaOp& running_mean,
-    const xla::XlaOp& running_var,
+    const xla::XlaOp& save_mean,
+    const xla::XlaOp& save_var,
     xla::XlaBuilder* b) {
   const auto eps = node->f(attr::eps);
-  return b->GetTupleElement(
-      b->BatchNormGrad(input, weight, running_mean, running_var, grad, eps, 1),
-      0);
+  const auto grads = b->BatchNormGrad(input, weight, save_mean, save_var, grad, eps, 1);
+  const auto grad_input = b->GetTupleElement(grads, 0);
+  const auto grad_weight = b->GetTupleElement(grads, 1);
+  const auto grad_bias = b->GetTupleElement(grads, 2);
+  return {grad_input, grad_weight, grad_bias};
 }
 
 xla::XlaOp build_compare_op(
@@ -1312,26 +1329,61 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::thnn_batch_norm_forward:
       case aten::batch_norm: {
         CHECK_EQ(node->inputs().size(), 5);
-        xla::XlaOp xla_output =
-            build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
-        current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
-        CHECK(it_ok.second);
+	const auto outputs =
+	  build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+        const auto node_outputs = node->outputs();
+        {
+          current_unique = node_outputs[0]->unique();
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[0]->unique(), outputs.output);
+          CHECK(it_ok.second);
+        }
+	if (node->kind() == aten::batch_norm) {
+	  CHECK_EQ(node->outputs().size(), 1);
+	}
+	// aten::batch_norm only has 1 output
+	// thnn_batch_norm_forward has output, save_mean, save_std
+	if (node->kind() == aten::thnn_batch_norm_forward) {
+	  {
+	    const auto it_ok = node_xla_ops.emplace(
+                node_outputs[1]->unique(), outputs.save_mean);
+	    CHECK(it_ok.second);
+	  }
+	  {
+	    const auto it_ok = node_xla_ops.emplace(
+                node_outputs[2]->unique(), outputs.save_std);
+	    CHECK(it_ok.second);
+	  }
+	}
         break;
       }
       case aten::thnn_batch_norm_backward: {
         CHECK_EQ(node->inputs().size(), 7);
-        xla::XlaOp xla_output = build_batch_norm_backward(
+	auto grads = build_batch_norm_backward(
             node,
-            *XLA_OP(0),
-            *XLA_OP(1),
-            *XLA_OP(2),
-            *XLA_OP(3),
-            *XLA_OP(4),
+            *XLA_OP(0), // grad_output
+            *XLA_OP(1), // input
+            *XLA_OP(2), // weight
+            *XLA_OP(5), // save_mean
+            *XLA_OP(6), // save_std
             &b);
-        current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
-        CHECK(it_ok.second);
+        const auto node_outputs = node->outputs();
+        {
+          current_unique = node_outputs[0]->unique();
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[0]->unique(), grads.grad_input);
+          CHECK(it_ok.second);
+        }
+        {
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[1]->unique(), grads.grad_weight);
+          CHECK(it_ok.second);
+        }
+        {
+          const auto it_ok = node_xla_ops.emplace(
+              node_outputs[2]->unique(), grads.grad_bias);
+          CHECK(it_ok.second);
+        }
         break;
       }
       case prim::Undefined: {
