@@ -502,6 +502,16 @@ struct Conv2DGrads {
   xla::XlaOp grad_bias;
 };
 
+xla::XlaComputation CreateAddComputation() {
+  xla::XlaBuilder reduction_builder("xla_add_computation");
+  const auto x = reduction_builder.Parameter(
+      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
+  const auto y = reduction_builder.Parameter(
+      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
+  reduction_builder.Add(x, y);
+  return reduction_builder.Build().ConsumeValueOrDie();
+}
+
 Conv2DGrads build_thnn_conv2d_backward(
     const Node* node,
     const xla::XlaOp& grad,
@@ -517,7 +527,10 @@ Conv2DGrads build_thnn_conv2d_backward(
       node, grad, input, weight, finput, fweight, b);
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
-  return {grad_input, grad_weight, xla_zero};
+  const auto grad_bias = b->Reduce(grad, xla_zero,
+				CreateAddComputation(),
+				{0, 2, 3});
+  return {grad_input, grad_weight, grad_bias};
 }
 
 xla::XlaOp build_addmm(
@@ -590,16 +603,6 @@ xla::XlaComputation CreateGeComputation() {
   const auto y = reduction_builder.Parameter(
       1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
   reduction_builder.Ge(x, y);
-  return reduction_builder.Build().ConsumeValueOrDie();
-}
-
-xla::XlaComputation CreateAddComputation() {
-  xla::XlaBuilder reduction_builder("xla_add_computation");
-  const auto x = reduction_builder.Parameter(
-      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
-  const auto y = reduction_builder.Parameter(
-      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
-  reduction_builder.Add(x, y);
   return reduction_builder.Build().ConsumeValueOrDie();
 }
 
