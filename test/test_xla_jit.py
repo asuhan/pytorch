@@ -285,66 +285,83 @@ class TestMNIST(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+def _maybe_list(t):
+    if isinstance(t, torch.Tensor):
+        t = [t]
+    return t
+
+def _random_like(tensor_list):
+    random_tensors = []
+    for o in tensor_list:
+        if o.dtype == torch.float32 or o.dtype == torch.float64:
+            random_tensors += [torch.randn(*o.shape, dtype=o.dtype)]
+        elif o.dtype == torch.int64:
+            # TODO remove this, we shouldn't be needing to pass random_tensor for long types
+            random_tensors += [torch.empty_like(o)]
+        else:
+            raise RuntimeError("Unsupported type: ", o.dtype)
+    return random_tensors
+
 class TestGradients(TestCase):
-
     def checkGrad(self, model, inputs, grad_outputs='random', xla=True):
-        inputs_params = inputs + list(model.parameters()) + list(model._all_buffers())
+        inputs_params = inputs + list(model.parameters())
+        inputs_params_buffers = inputs_params + list(model._all_buffers())
 
+        # Trace and symbolically differentiate
         traced_model = torch.jit.trace(*inputs)(model)
         fwd = traced_model._get_method('forward')
         _forward_passes(fwd.graph)
 
-        inputs_require_grad = [i.requires_grad for i in inputs_params]
+        inputs_require_grad = [i.requires_grad for i in inputs_params_buffers]
         gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
         _forward_passes(gradient.f)
         _backward_passes(gradient.df)
 
+        ##############################################################
+        # Run forward and backwarg graphs via jit interpreter
         exec_f = torch._C.GraphExecutor(gradient.f, False)
         exec_df = torch._C.GraphExecutor(gradient.df, False)
 
         # forward function
-        raw_outputs = exec_f(*inputs_params)
-
-        if isinstance(raw_outputs, torch.Tensor):
-            raw_outputs = [raw_outputs]
+        raw_outputs = exec_f(*inputs_params_buffers)
+        raw_outputs = _maybe_list(raw_outputs)
         outputs = raw_outputs[:gradient.f_real_outputs]
 
         if grad_outputs == 'random':
-            grad_outputs = []
-            for o in raw_outputs:
-                if o.dtype == torch.float32 or o.dtype == torch.float64:
-                    grad_outputs += [torch.randn(*o.shape, dtype=o.dtype)]
-                elif o.dtype == torch.int64:
-                    # TODO remove this, we shouldn't be needing to pass grad_output for long types
-                    grad_outputs += [torch.empty_like(o)]
-                else:
-                    raise RuntimeError("Unsupported type: ", o.dtype)
+            grad_outputs = _random_like(raw_outputs)
 
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
-        raw_grad_outputs += [inputs_params[i] for i in gradient.df_input_captured_inputs]
+        raw_grad_outputs += [inputs_params_buffers[i] for i in gradient.df_input_captured_inputs]
         raw_grad_outputs += [raw_outputs[i] for i in gradient.df_input_captured_outputs]
 
         grad_inputs = exec_df(*raw_grad_outputs)
-        if isinstance(grad_inputs, torch.Tensor):
-            grad_inputs = [grad_inputs]
+        grad_inputs = _maybe_list(grad_inputs)
 
+        ##############################################################
         # backward with XLA
         if xla:
             traced_backward = torch._C._to_xla_module_grad(gradient.df)
-            xla_grad_inputs = traced_backward(*raw_grad_outputs)
-            if isinstance(xla_grad_inputs, torch.Tensor):
-                xla_grad_inputs = [xla_grad_inputs]
-
+            grad_inputs_xla = traced_backward(*raw_grad_outputs)
+            grad_inputs_xla = _maybe_list(grad_inputs_xla)
+        ##############################################################
         # forward + backward with regular autograd / torch
-        out_groundtruth = model(*inputs)
-        out_groundtruth.backward(grad_outputs[0]) # TODO: generalize it to *grad_outputs
-        self.assertEqual(outputs[0], out_groundtruth)
-        self.assertEqual(grad_inputs[0], inputs[0].grad)
+        outputs_gt = model(*inputs)
+        outputs_gt = _maybe_list(outputs_gt)
+        grad_inputs_gt = torch.autograd.grad(outputs_gt,
+                                             inputs_params,
+                                             grad_outputs,
+                                             only_inputs=True)
+        for out_jit, out_autograd in zip(outputs, outputs_gt):
+            self.assertEqual(out_jit, out_autograd)
+        for grad_input_jit, grad_input_autograd in zip(grad_inputs, grad_inputs_gt):
+            self.assertEqual(grad_input_jit, grad_input_autograd)
+
+        # TODO: test buffers as well (running_mean, etc.)
+
         if xla:
-            self.assertEqual(grad_inputs[0], xla_grad_inputs[0])
-            if len(xla_grad_inputs) > 1:
-                self.assertEqual(grad_inputs[1], xla_grad_inputs[1], prec=1e-3)
+            for i, (grad_input_jit, grad_input_xla) in enumerate(zip(grad_inputs, grad_inputs_xla)):
+                self.assertEqual(grad_input_jit, grad_input_xla, 1e-3)
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
@@ -391,7 +408,7 @@ class TestGradients(TestCase):
                 for size in [1, 2, 3]:
                     for stride in [1, 2]:
                         for padding in [0, 1]:
-                            # TODO: dilation, groups, transpose
+                            # TODO: dilation, groups, transpose, bias
                             model = nn.Conv2d(ichans, ochans, size, stride, padding)
                             inputs = [torch.randn(4, ichans, 28, 28, requires_grad=True)]
                             self.checkGrad(model, inputs, xla=True)
