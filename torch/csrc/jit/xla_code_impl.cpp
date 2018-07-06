@@ -761,35 +761,17 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
   }
   const auto& padding = node->is(attr::padding);
   CHECK_EQ(padding.size(), 2);
-  xla::PaddingConfig padding_config;
-  for (int i = 0; i < 2; ++i) {
-    padding_config.add_dimensions();
-  }
+
   const auto node_inputs = node->inputs();
   auto output_size = tensor_sizes(node_inputs[0]);
   auto input_size = tensor_sizes(node_inputs[1]);
-  for (int i = 0; i < 2; ++i) {
-    auto dims = padding_config.add_dimensions();
-    *dims = make_avg_pool2d_backprop_padding(
-        kernel_size[i],
-        input_size[2 + i],
-        window_strides[2 + i],
-        output_size[2 + i],
-        padding[i]);
-  }
+
   const auto add_computation = CreateAddComputation();
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
-  const auto padded_out_backprop =
-      b->Pad(out_backprop, xla_zero, padding_config);
+  const auto count_include_pad = node->i(attr::count_include_pad);
   std::vector<int64> one_strides(4, 1LL);
-  const auto sum = b->ReduceWindow(
-      padded_out_backprop,
-      xla_zero,
-      add_computation,
-      window_dimensions,
-      one_strides,
-      xla::Padding::kValid);
+
   xla::PaddingConfig remove_padding_config;
   for (int i = 0; i < 2; ++i) {
     remove_padding_config.add_dimensions();
@@ -799,21 +781,120 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
     dims->set_edge_padding_low(-padding[i]);
     dims->set_edge_padding_high(-padding[i]);
   }
-  const auto count_include_pad = node->i(attr::count_include_pad);
-  if (!count_include_pad) {
-    LOG(INFO)
-        << "avg_pool2d_backward with count_include_pad=False not supported yet";
-    return at::nullopt;
+
+  if (count_include_pad) {
+    xla::PaddingConfig padding_config;
+    for (int i = 0; i < 2; ++i) {
+      padding_config.add_dimensions();
+    }
+    for (int i = 0; i < 2; ++i) {
+      auto dims = padding_config.add_dimensions();
+      *dims = make_avg_pool2d_backprop_padding(
+          kernel_size[i],
+          input_size[2 + i],
+          window_strides[2 + i],
+          output_size[2 + i],
+          padding[i]);
+    }
+    const auto padded_out_backprop =
+        b->Pad(out_backprop, xla_zero, padding_config);
+    const auto sum = b->ReduceWindow(
+        padded_out_backprop,
+        xla_zero,
+        add_computation,
+        window_dimensions,
+        one_strides,
+        xla::Padding::kValid);
+    const auto kernel_elements = std::accumulate(
+        kernel_size.begin(),
+        kernel_size.end(),
+        1,
+        [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
+    const auto count_literal = xla::Literal::CreateR0<float>(kernel_elements);
+    const auto count = b->ConstantLiteral(*count_literal);
+    const auto sum_removed_padding =
+        b->Pad(sum, xla_zero, remove_padding_config);
+    return b->Div(sum_removed_padding, count);
+  } else {
+    // Build a matrix of all 1s, with the same width/height as the input.
+    const auto one_literal = xla::Literal::CreateR0<float>(1);
+    const auto xla_one = b->ConstantLiteral(*one_literal);
+    const auto ones = b->Broadcast(xla_one, xla_i64_list(input_size));
+    // Pad it like the sum matrix.
+    xla::PaddingConfig ones_padding_config;
+    for (int i = 0; i < 2; ++i) {
+      ones_padding_config.add_dimensions();
+    }
+    for (int i = 0; i < 2; ++i) {
+      auto dims = ones_padding_config.add_dimensions();
+      dims->set_edge_padding_low(padding[i]);
+      dims->set_edge_padding_high(padding[i]);
+    }
+    const auto padded_ones = b->Pad(ones, xla_zero, ones_padding_config);
+    const auto counts = b->ReduceWindow(
+        padded_ones,
+        xla_zero,
+        add_computation,
+        window_dimensions,
+        window_strides,
+        xla::Padding::kValid);
+    const auto out_backprop_div = b->Div(out_backprop, counts);
+    std::vector<int64> filter_dims(4);
+    for (int i = 0; i < 2; ++i) {
+      filter_dims[i] = kernel_size[i];
+    }
+    int64_t depth = output_size[1];
+    filter_dims[2] = filter_dims[3] = depth;
+    tensorflow::TensorShape filter_shape(filter_dims);
+    tensorflow::TensorShape out_backprop_shape(
+        xla_i64_list(tensor_sizes(node_inputs[0])));
+    auto gradients_size = tensor_sizes(node_inputs[1]);
+    for (int i = 0; i < 2; ++i) {
+      gradients_size[2 + i] += 2 * padding[i];
+    }
+    tensorflow::TensorShape gradients_shape(xla_i64_list(gradients_size));
+    // Reuse the logic from Conv2DBackpropInput to compute padding.
+    tensorflow::ConvBackpropDimensions dims;
+    std::vector<int> strides;
+    std::copy(
+        window_strides.begin(),
+        window_strides.end(),
+        std::back_inserter(strides));
+    const auto status = ConvBackpropComputeDimensions(
+        "avg_pool2d_backward",
+        /*num_spatial_dims=*/2,
+        gradients_shape,
+        filter_shape,
+        out_backprop_shape,
+        strides,
+        tensorflow::Padding::VALID,
+        tensorflow::TensorFormat::FORMAT_NCHW,
+        &dims);
+    CHECK(status.ok()) << status.error_message();
+
+    // Pad the gradients in the spatial dimensions. We use the same padding
+    // as Conv2DBackpropInput.
+    xla::PaddingConfig grad_padding_config = xla::MakeNoPaddingConfig(4);
+    for (int i = 0; i < 2; ++i) {
+      int dim = 2 + i;
+      auto* padding = grad_padding_config.mutable_dimensions(dim);
+      padding->set_edge_padding_low(dims.spatial_dims[i].pad_before);
+      padding->set_edge_padding_high(dims.spatial_dims[i].pad_after);
+      padding->set_interior_padding(dims.spatial_dims[i].stride - 1);
+    }
+    auto padded_gradients =
+        b->Pad(out_backprop_div, xla_zero, grad_padding_config);
+
+    // in_backprop = padded_gradients <conv> ones
+    const auto in_backprop = b->ReduceWindow(
+        padded_gradients,
+        xla_zero,
+        add_computation,
+        window_dimensions,
+        /* window_strides=*/one_strides,
+        xla::Padding::kValid);
+    return b->Pad(in_backprop, xla_zero, remove_padding_config);
   }
-  const auto kernel_elements = std::accumulate(
-      kernel_size.begin(),
-      kernel_size.end(),
-      1,
-      [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
-  const auto count_literal = xla::Literal::CreateR0<float>(kernel_elements);
-  const auto count = b->ConstantLiteral(*count_literal);
-  const auto sum_removed_padding = b->Pad(sum, xla_zero, remove_padding_config);
-  return b->Div(sum_removed_padding, count);
 }
 
 at::optional<xla::XlaOp> build_log_softmax(

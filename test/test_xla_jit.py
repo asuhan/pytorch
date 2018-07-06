@@ -363,19 +363,21 @@ class TestGradients(TestCase):
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):
-            def __init__(self, stride, padding):
+            def __init__(self, stride, padding, count_include_pad):
                 super(AvgPoolGrad, self).__init__()
                 self.stride = stride
                 self.padding = padding
+                self.count_include_pad = count_include_pad
 
             def forward(self, x):
-                return F.avg_pool2d(x, 2, self.stride, self.padding)
+                return F.avg_pool2d(x, 2, self.stride, self.padding, False, self.count_include_pad)
 
         for stride in [1, 2, None]:
             for padding in [0, 1]:
-                model = AvgPoolGrad(stride, padding)
-                inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
-                self.checkGrad(model, inputs)
+                for count_include_pad in [False, True]:
+                    model = AvgPoolGrad(stride, padding, count_include_pad)
+                    inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
+                    self.checkGrad(model, inputs)
 
     def test_threshold(self):
         class ThresholdPoolGrad(nn.Module):
