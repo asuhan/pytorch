@@ -1,8 +1,16 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/xla_code_impl.h"
+#include "tensorflow/compiler/xla/client/lib/math.h"
 #include "tensorflow/core/kernels/conv_grad_ops.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
+
+namespace xla {
+
+// TODO: fix it in TensorFlow
+XlaOp Exp(const XlaOp& operand);
+
+} // namespace xla
 
 namespace {
 
@@ -177,14 +185,13 @@ namespace {
 xla::XlaOp build_binary_op(
     const Node* node,
     const xla::XlaOp& lhs,
-    const xla::XlaOp& rhs,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& rhs) {
   switch (node->kind()) {
     case aten::add: {
-      return b->Add(lhs, rhs);
+      return lhs + rhs;
     }
     case aten::mul: {
-      return b->Mul(lhs, rhs);
+      return lhs * rhs;
     }
     default:
       LOG(FATAL) << "Invalid binary operator kind: " << node->kind();
@@ -209,19 +216,17 @@ std::vector<std::pair<int64, int64>> make_padding(const Node* node) {
 xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
-    const xla::XlaOp& rhs,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& rhs) {
   const auto window_strides = xla_i64_list(node->is(attr::stride));
   const auto dims_padding = make_padding(node);
-  return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
+  return ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
 }
 
 xla::XlaOp build_convolution_bias(
     const Node* node,
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
-    const xla::XlaOp& bias,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& bias) {
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), 3); // input, weight, bias
   const auto bias_size = tensor_sizes(node_inputs[2]);
@@ -232,9 +237,9 @@ xla::XlaOp build_convolution_bias(
   broadcast_sizes.erase(broadcast_sizes.begin() + 1);
   // Make the bias match the output dimensions.
   const auto bias_broadcast =
-      b->Transpose(b->Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
-  const auto conv = build_convolution(node, lhs, rhs, b);
-  return b->Add(conv, bias_broadcast);
+      Transpose(Broadcast(bias, broadcast_sizes), {0, 3, 1, 2});
+  const auto conv = build_convolution(node, lhs, rhs);
+  return conv + bias_broadcast;
 }
 
 xla::XlaOp build_thnn_conv2d_backward_input(
@@ -243,8 +248,7 @@ xla::XlaOp build_thnn_conv2d_backward_input(
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
     const xla::XlaOp& finput,
-    const xla::XlaOp& fweight,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& fweight) {
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), 5);
   const auto& padding_attr = node->is(attr::padding);
@@ -318,7 +322,7 @@ xla::XlaOp build_thnn_conv2d_backward_input(
   }
 
   // Mirror the filter in the spatial dimensions.
-  xla::XlaOp mirrored_weights = b->Rev(weight, kernel_spatial_dims);
+  xla::XlaOp mirrored_weights = Rev(weight, kernel_spatial_dims);
 
   // We'll need to undo the initial input padding once on the input backprop
   // result since edges are constant and have to be discarded for the gradient.
@@ -332,13 +336,13 @@ xla::XlaOp build_thnn_conv2d_backward_input(
     dims->set_edge_padding_high(-padding_attr[i]);
   }
 
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto xla_zero = ConstantLiteral(grad.builder(), *zero_literal);
 
   // activation gradients
   //   = gradients (with padding and dilation) <conv> mirrored_weights
-  return b->Pad(
-      b->ConvGeneralDilated(
+  return Pad(
+      ConvGeneralDilated(
           grad,
           mirrored_weights,
           /*window_strides=*/ones,
@@ -356,8 +360,7 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
     const xla::XlaOp& finput,
-    const xla::XlaOp& fweight,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& fweight) {
   constexpr int n_dim = 0;
   constexpr int c_dim = 1;
   const auto node_inputs = node->inputs();
@@ -478,12 +481,12 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
     dims->set_edge_padding_high(padding_attr[i]);
   }
 
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto xla_zero = ConstantLiteral(grad.builder(), *zero_literal);
 
-  const auto padded_input = b->Pad(input, xla_zero, padding_config);
+  const auto padded_input = Pad(input, xla_zero, padding_config);
 
-  return b->ConvGeneralDilated(
+  return ConvGeneralDilated(
       padded_input,
       grad,
       window_strides,
@@ -501,11 +504,17 @@ struct Conv2DGrads {
 
 xla::XlaComputation CreateAddComputation() {
   xla::XlaBuilder reduction_builder("xla_add_computation");
-  const auto x = reduction_builder.Parameter(
-      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
-  const auto y = reduction_builder.Parameter(
-      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
-  reduction_builder.Add(x, y);
+  const auto x = Parameter(
+      &reduction_builder,
+      0,
+      xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}),
+      "x");
+  const auto y = Parameter(
+      &reduction_builder,
+      1,
+      xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}),
+      "y");
+  x + y;
   return reduction_builder.Build().ConsumeValueOrDie();
 }
 
@@ -515,36 +524,38 @@ Conv2DGrads build_thnn_conv2d_backward(
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
     const xla::XlaOp& finput,
-    const xla::XlaOp& fweight,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& fweight) {
   const auto grad_input = build_thnn_conv2d_backward_input(
-      node, grad, input, weight, finput, fweight, b);
+      node, grad, input, weight, finput, fweight);
   // TODO: support weight and bias gradients
   const auto grad_weight = build_thnn_conv2d_backward_weight(
-      node, grad, input, weight, finput, fweight, b);
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+      node, grad, input, weight, finput, fweight);
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto xla_zero = ConstantLiteral(grad.builder(), *zero_literal);
   const auto grad_bias =
-      b->Reduce(grad, xla_zero, CreateAddComputation(), {0, 2, 3});
+      Reduce(grad, xla_zero, CreateAddComputation(), {0, 2, 3});
   return {grad_input, grad_weight, grad_bias};
 }
 
 xla::XlaComputation CreateMaxComputation() {
   xla::XlaBuilder reduction_builder("xla_max_computation");
-  const auto x = reduction_builder.Parameter(
-      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
-  const auto y = reduction_builder.Parameter(
-      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
-  reduction_builder.Max(x, y);
+  const auto x = Parameter(
+      &reduction_builder,
+      0,
+      xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}),
+      "x");
+  const auto y = Parameter(
+      &reduction_builder,
+      1,
+      xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}),
+      "y");
+  Max(x, y);
   return reduction_builder.Build().ConsumeValueOrDie();
 }
 
-xla::XlaOp build_max_pool2d(
-    const Node* node,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
+xla::XlaOp build_max_pool2d(const Node* node, const xla::XlaOp& input) {
   const auto max_computation = CreateMaxComputation();
-  const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
+  const auto init_value = xla::LiteralUtil::MinValue(xla::PrimitiveType::F32);
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
   const auto kernel_size = xla_i64_list(node->is(attr::kernel_size));
@@ -565,9 +576,9 @@ xla::XlaOp build_max_pool2d(
   window_padding.resize(2);
   window_padding.insert(
       window_padding.end(), spatial_padding.begin(), spatial_padding.end());
-  return b->ReduceWindowWithGeneralPadding(
+  return ReduceWindowWithGeneralPadding(
       input,
-      b->ConstantLiteral(init_value),
+      ConstantLiteral(input.builder(), init_value),
       max_computation,
       window_dimensions,
       window_strides,
@@ -576,21 +587,26 @@ xla::XlaOp build_max_pool2d(
 
 xla::XlaComputation CreateGeComputation() {
   xla::XlaBuilder reduction_builder("xla_ge_computation");
-  const auto x = reduction_builder.Parameter(
-      0, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "x");
-  const auto y = reduction_builder.Parameter(
-      1, xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}), "y");
-  reduction_builder.Ge(x, y);
+  const auto x = Parameter(
+      &reduction_builder,
+      0,
+      xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}),
+      "x");
+  const auto y = Parameter(
+      &reduction_builder,
+      1,
+      xla::ShapeUtil::MakeShape(xla::PrimitiveType::F32, {}),
+      "y");
+  Ge(x, y);
   return reduction_builder.Build().ConsumeValueOrDie();
 }
 
 xla::XlaOp build_max_pool2d_backward(
     const Node* node,
     const xla::XlaOp& out_backprop,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto init_value = b->ConstantLiteral(*zero_literal);
+    const xla::XlaOp& input) {
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto init_value = ConstantLiteral(input.builder(), *zero_literal);
   const auto select = CreateGeComputation();
   const auto scatter = CreateAddComputation();
   std::vector<int64> window_dimensions;
@@ -613,7 +629,7 @@ xla::XlaOp build_max_pool2d_backward(
   window_padding.resize(2);
   window_padding.insert(
       window_padding.end(), spatial_padding.begin(), spatial_padding.end());
-  return b->SelectAndScatterWithGeneralPadding(
+  return SelectAndScatterWithGeneralPadding(
       input,
       select,
       window_dimensions,
@@ -635,8 +651,7 @@ bool avg_pool2d_supported(const Node* node) {
 
 at::optional<xla::XlaOp> build_avg_pool2d(
     const Node* node,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& input) {
   // Inspired from tf2xla.
   if (!avg_pool2d_supported(node)) {
     return at::nullopt;
@@ -662,10 +677,11 @@ at::optional<xla::XlaOp> build_avg_pool2d(
     dims->set_edge_padding_high(padding[i]);
   }
   const auto add_computation = CreateAddComputation();
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
-  const auto padded_input = b->Pad(input, xla_zero, padding_config);
-  const auto sum = b->ReduceWindow(
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  auto b = input.builder();
+  const auto xla_zero = ConstantLiteral(b, *zero_literal);
+  const auto padded_input = Pad(input, xla_zero, padding_config);
+  const auto sum = ReduceWindow(
       padded_input,
       xla_zero,
       add_computation,
@@ -679,26 +695,26 @@ at::optional<xla::XlaOp> build_avg_pool2d(
         kernel_size.end(),
         1,
         [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
-    const auto count_literal = xla::Literal::CreateR0<float>(kernel_elements);
-    const auto count = b->ConstantLiteral(*count_literal);
-    return b->Div(sum, count);
+    const auto count_literal =
+        xla::LiteralUtil::CreateR0<float>(kernel_elements);
+    const auto count = ConstantLiteral(b, *count_literal);
+    return sum / count;
   } else {
     const auto node_inputs = node->inputs();
     auto input_size = xla_i64_list(tensor_sizes(node_inputs[0]));
     // Build a matrix of all 1s, with the same width/height as the input.
-    const auto one_literal = xla::Literal::CreateR0<float>(1);
-    const auto ones =
-        b->Broadcast(b->ConstantLiteral(*one_literal), input_size);
+    const auto one_literal = xla::LiteralUtil::CreateR0<float>(1);
+    const auto ones = Broadcast(ConstantLiteral(b, *one_literal), input_size);
     // Pad it like the sum matrix.
-    const auto padded_ones = b->Pad(ones, xla_zero, padding_config);
-    const auto counts = b->ReduceWindow(
+    const auto padded_ones = Pad(ones, xla_zero, padding_config);
+    const auto counts = ReduceWindow(
         padded_ones,
         xla_zero,
         add_computation,
         window_dimensions,
         window_strides,
         xla::Padding::kValid);
-    return b->Div(sum, counts);
+    return sum / counts;
   }
 }
 
@@ -722,8 +738,7 @@ xla::PaddingConfig::PaddingConfigDimension make_avg_pool2d_backprop_padding(
 at::optional<xla::XlaOp> build_avg_pool2d_backward(
     const Node* node,
     const xla::XlaOp& out_backprop,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& input) {
   // Inspired from tf2xla.
   if (!avg_pool2d_supported(node)) {
     return at::nullopt;
@@ -750,8 +765,9 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
   auto input_size = tensor_sizes(node_inputs[1]);
 
   const auto add_computation = CreateAddComputation();
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  auto b = input.builder();
+  const auto xla_zero = ConstantLiteral(b, *zero_literal);
   const auto count_include_pad = node->i(attr::count_include_pad);
   std::vector<int64> one_strides(4, 1LL);
 
@@ -780,8 +796,8 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
           padding[i]);
     }
     const auto padded_out_backprop =
-        b->Pad(out_backprop, xla_zero, padding_config);
-    const auto sum = b->ReduceWindow(
+        Pad(out_backprop, xla_zero, padding_config);
+    const auto sum = ReduceWindow(
         padded_out_backprop,
         xla_zero,
         add_computation,
@@ -793,16 +809,16 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
         kernel_size.end(),
         1,
         [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
-    const auto count_literal = xla::Literal::CreateR0<float>(kernel_elements);
-    const auto count = b->ConstantLiteral(*count_literal);
-    const auto sum_removed_padding =
-        b->Pad(sum, xla_zero, remove_padding_config);
-    return b->Div(sum_removed_padding, count);
+    const auto count_literal =
+        xla::LiteralUtil::CreateR0<float>(kernel_elements);
+    const auto count = ConstantLiteral(b, *count_literal);
+    const auto sum_removed_padding = Pad(sum, xla_zero, remove_padding_config);
+    return sum_removed_padding / count;
   } else {
     // Build a matrix of all 1s, with the same width/height as the input.
-    const auto one_literal = xla::Literal::CreateR0<float>(1);
-    const auto xla_one = b->ConstantLiteral(*one_literal);
-    const auto ones = b->Broadcast(xla_one, xla_i64_list(input_size));
+    const auto one_literal = xla::LiteralUtil::CreateR0<float>(1);
+    const auto xla_one = ConstantLiteral(b, *one_literal);
+    const auto ones = Broadcast(xla_one, xla_i64_list(input_size));
     // Pad it like the sum matrix.
     xla::PaddingConfig ones_padding_config;
     for (int i = 0; i < 2; ++i) {
@@ -813,15 +829,15 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
       dims->set_edge_padding_low(padding[i]);
       dims->set_edge_padding_high(padding[i]);
     }
-    const auto padded_ones = b->Pad(ones, xla_zero, ones_padding_config);
-    const auto counts = b->ReduceWindow(
+    const auto padded_ones = Pad(ones, xla_zero, ones_padding_config);
+    const auto counts = ReduceWindow(
         padded_ones,
         xla_zero,
         add_computation,
         window_dimensions,
         window_strides,
         xla::Padding::kValid);
-    const auto out_backprop_div = b->Div(out_backprop, counts);
+    const auto out_backprop_div = out_backprop / counts;
     std::vector<int64> filter_dims(4);
     for (int i = 0; i < 2; ++i) {
       filter_dims[i] = kernel_size[i];
@@ -866,24 +882,23 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
       padding->set_interior_padding(dims.spatial_dims[i].stride - 1);
     }
     auto padded_gradients =
-        b->Pad(out_backprop_div, xla_zero, grad_padding_config);
+        Pad(out_backprop_div, xla_zero, grad_padding_config);
 
     // in_backprop = padded_gradients <conv> ones
-    const auto in_backprop = b->ReduceWindow(
+    const auto in_backprop = ReduceWindow(
         padded_gradients,
         xla_zero,
         add_computation,
         window_dimensions,
         /* window_strides=*/one_strides,
         xla::Padding::kValid);
-    return b->Pad(in_backprop, xla_zero, remove_padding_config);
+    return Pad(in_backprop, xla_zero, remove_padding_config);
   }
 }
 
 at::optional<xla::XlaOp> build_log_softmax(
     const Node* node,
-    const xla::XlaOp& logits,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& logits) {
   // Inspired from tf2xla.
   int64 dim = node->i(attr::dim);
 
@@ -900,16 +915,17 @@ at::optional<xla::XlaOp> build_log_softmax(
   }
 
   const auto max_func = CreateMaxComputation();
-  const auto min_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
+  const auto min_value = xla::LiteralUtil::MinValue(xla::PrimitiveType::F32);
+  auto b = logits.builder();
   const auto logits_max =
-      b->Reduce(logits, b->ConstantLiteral(min_value), max_func, {dim});
-  const auto shifted_logits = b->Sub(logits, logits_max, broadcast_dimensions);
-  const auto exp_shifted = b->Exp(shifted_logits);
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+      Reduce(logits, ConstantLiteral(b, min_value), max_func, {dim});
+  const auto shifted_logits = Sub(logits, logits_max, broadcast_dimensions);
+  const auto exp_shifted = Exp(shifted_logits);
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto xla_zero = ConstantLiteral(b, *zero_literal);
   const auto reduce =
-      b->Reduce(exp_shifted, xla_zero, CreateAddComputation(), {dim});
-  return b->Sub(shifted_logits, b->Log(reduce), broadcast_dimensions);
+      Reduce(exp_shifted, xla_zero, CreateAddComputation(), {dim});
+  return Sub(shifted_logits, Log(reduce), broadcast_dimensions);
 }
 
 double one_elem_tensor_value(const at::Tensor& t) {
@@ -923,45 +939,36 @@ double one_elem_tensor_value(const at::Tensor& t) {
   }
 }
 
-xla::XlaOp build_threshold(
-    const Node* node,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
+xla::XlaOp build_threshold(const Node* node, const xla::XlaOp& input) {
   const auto& threshold_tensor = node->t(attr::threshold);
   CHECK_EQ(threshold_tensor.ndimension(), 0);
-  const auto threshold_literal =
-      xla::Literal::CreateR0<float>(one_elem_tensor_value(threshold_tensor));
-  const auto threshold = b->ConstantLiteral(*threshold_literal);
+  const auto threshold_literal = xla::LiteralUtil::CreateR0<float>(
+      one_elem_tensor_value(threshold_tensor));
+  auto b = input.builder();
+  const auto threshold = ConstantLiteral(b, *threshold_literal);
   const auto& value_tensor = node->t(attr::value);
   CHECK_EQ(value_tensor.ndimension(), 0);
   const auto value_literal =
-      xla::Literal::CreateR0<float>(one_elem_tensor_value(value_tensor));
-  const auto value = b->ConstantLiteral(*value_literal);
+      xla::LiteralUtil::CreateR0<float>(one_elem_tensor_value(value_tensor));
+  const auto value = ConstantLiteral(b, *value_literal);
   const auto node_inputs = node->inputs();
   const auto input_sizes = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
   std::copy(input_sizes.begin(), input_sizes.end(), broadcast_sizes.begin());
-  return b->Select(
-      b->Gt(input, threshold), input, b->Broadcast(value, broadcast_sizes));
+  return Select(Gt(input, threshold), input, Broadcast(value, broadcast_sizes));
 }
 
-xla::XlaOp build_view(
-    const Node* node,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
+xla::XlaOp build_view(const Node* node, const xla::XlaOp& input) {
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), 1);
   const auto input_sizes = tensor_sizes(node_inputs[0]);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
   const auto output_sizes = tensor_sizes(node_outputs[0]);
-  return b->Reshape(input, xla_i64_list(output_sizes));
+  return Reshape(input, xla_i64_list(output_sizes));
 }
 
-xla::XlaOp build_expand(
-    const Node* node,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
+xla::XlaOp build_expand(const Node* node, const xla::XlaOp& input) {
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), 1);
   auto input_sizes = tensor_sizes(node_inputs[0]);
@@ -973,7 +980,7 @@ xla::XlaOp build_expand(
   for (size_t i = 0; i < output_sizes.size() - input_sizes.size(); ++i) {
     input_sizes.insert(input_sizes.begin(), 1);
   }
-  const auto implicit_reshape = b->Reshape(input, xla_i64_list(input_sizes));
+  const auto implicit_reshape = Reshape(input, xla_i64_list(input_sizes));
   // Squeeze the trivial (of size 1) dimensions.
   std::vector<int64> non_singleton_dimensions;
   std::copy_if(
@@ -982,7 +989,7 @@ xla::XlaOp build_expand(
       std::back_inserter(non_singleton_dimensions),
       [](const size_t dim_size) { return dim_size != 1; });
   const auto squeezed_input =
-      b->Reshape(implicit_reshape, non_singleton_dimensions);
+      Reshape(implicit_reshape, non_singleton_dimensions);
   // Broadcast the squeezed tensor, the additional dimensions are to the left.
   std::vector<int64> broadcast_sizes;
   for (size_t i = 0; i < input_sizes.size(); ++i) {
@@ -990,7 +997,7 @@ xla::XlaOp build_expand(
       broadcast_sizes.push_back(output_sizes[i]);
     }
   }
-  const auto broadcast = b->Broadcast(squeezed_input, broadcast_sizes);
+  const auto broadcast = Broadcast(squeezed_input, broadcast_sizes);
   // Bring the dimensions added by broadcast where the trivial dimensions were.
   std::vector<int64> reshape_permutation;
   for (size_t i = 0; i < input_sizes.size(); ++i) {
@@ -1003,13 +1010,12 @@ xla::XlaOp build_expand(
       reshape_permutation.push_back(i);
     }
   }
-  return b->Reshape(broadcast, reshape_permutation, xla_i64_list(output_sizes));
+  return Reshape(broadcast, reshape_permutation, xla_i64_list(output_sizes));
 }
 
 xla::XlaOp build_stack(
     const Node* node,
-    const std::vector<xla::XlaOp>& inputs,
-    xla::XlaBuilder* b) {
+    const std::vector<xla::XlaOp>& inputs) {
   const auto dim = node->i(attr::dim);
   std::vector<xla::XlaOp> reshaped_inputs;
   const auto node_inputs = node->inputs();
@@ -1018,9 +1024,10 @@ xla::XlaOp build_stack(
   for (size_t i = 0; i < node_inputs.size(); ++i) {
     auto reshaped_input_size = xla_i64_list(tensor_sizes(node_inputs[i]));
     reshaped_input_size.insert(reshaped_input_size.begin() + dim, 1);
-    reshaped_inputs.push_back(b->Reshape(inputs[i], reshaped_input_size));
+    reshaped_inputs.push_back(Reshape(inputs[i], reshaped_input_size));
   }
-  return b->ConcatInDim(reshaped_inputs, dim);
+  CHECK(!inputs.empty());
+  return ConcatInDim(inputs.front().builder(), reshaped_inputs, dim);
 }
 
 struct BatchNormOutput {
@@ -1036,18 +1043,16 @@ BatchNormOutput build_batch_norm(
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
   const auto epsf = node->f(attr::eps);
-  const auto eps_literal = xla::Literal::CreateR0<float>(epsf);
-  const auto eps = b->ConstantLiteral(*eps_literal);
-  const auto one_literal = xla::Literal::CreateR0<float>(1.0f);
-  const auto one = b->ConstantLiteral(*one_literal);
-  const auto half_literal = xla::Literal::CreateR0<float>(0.5f);
-  const auto half = b->ConstantLiteral(*half_literal);
+  const auto eps_literal = xla::LiteralUtil::CreateR0<float>(epsf);
+  const auto eps = ConstantLiteral(b, *eps_literal);
+  const auto one_literal = xla::LiteralUtil::CreateR0<float>(1.0f);
+  const auto one = ConstantLiteral(b, *one_literal);
 
-  auto outputs = b->BatchNormTraining(input, weight, bias, epsf, 1);
-  auto output = b->GetTupleElement(outputs, 0);
-  auto save_mean = b->GetTupleElement(outputs, 1);
-  auto save_var = b->GetTupleElement(outputs, 2);
-  auto save_invstd_eps = b->Div(one, b->Pow(b->Add(save_var, eps), half));
+  auto outputs = BatchNormTraining(input, weight, bias, epsf, 1);
+  auto output = GetTupleElement(outputs, 0);
+  auto save_mean = GetTupleElement(outputs, 1);
+  auto save_var = GetTupleElement(outputs, 2);
+  auto save_invstd_eps = one / Sqrt(save_var + eps);
   return {output, save_mean, save_invstd_eps};
 }
 
@@ -1066,45 +1071,40 @@ BatchNormGrads build_batch_norm_backward(
     const xla::XlaOp& save_invstd_eps,
     xla::XlaBuilder* b) {
   const auto epsf = node->f(attr::eps);
-  const auto eps_literal = xla::Literal::CreateR0<float>(epsf);
-  const auto eps = b->ConstantLiteral(*eps_literal);
-  const auto one_literal = xla::Literal::CreateR0<float>(1.0f);
-  const auto one = b->ConstantLiteral(*one_literal);
-  const auto two_literal = xla::Literal::CreateR0<float>(2.0f);
-  const auto two = b->ConstantLiteral(*two_literal);
-  const auto save_var = b->Sub(b->Pow(b->Div(one, save_invstd_eps), two), eps);
+  const auto eps_literal = xla::LiteralUtil::CreateR0<float>(epsf);
+  const auto eps = ConstantLiteral(b, *eps_literal);
+  const auto one_literal = xla::LiteralUtil::CreateR0<float>(1.0f);
+  const auto one = ConstantLiteral(b, *one_literal);
+  const auto save_var = Square(one / save_invstd_eps) - eps;
   const auto grads =
-      b->BatchNormGrad(input, weight, save_mean, save_var, grad, epsf, 1);
-  const auto grad_input = b->GetTupleElement(grads, 0);
-  const auto grad_weight = b->GetTupleElement(grads, 1);
-  const auto grad_bias = b->GetTupleElement(grads, 2);
+      BatchNormGrad(input, weight, save_mean, save_var, grad, epsf, 1);
+  const auto grad_input = GetTupleElement(grads, 0);
+  const auto grad_weight = GetTupleElement(grads, 1);
+  const auto grad_bias = GetTupleElement(grads, 2);
   return {grad_input, grad_weight, grad_bias};
 }
 
-xla::XlaOp build_compare_op(
-    const Node* node,
-    const xla::XlaOp& operand,
-    xla::XlaBuilder* b) {
+xla::XlaOp build_compare_op(const Node* node, const xla::XlaOp& operand) {
   const float other = one_elem_tensor_value(node->t(attr::other));
-  const auto other_literal = xla::Literal::CreateR0<float>(other);
-  const auto xla_other = b->ConstantLiteral(*other_literal);
+  const auto other_literal = xla::LiteralUtil::CreateR0<float>(other);
+  auto b = operand.builder();
+  const auto xla_other = ConstantLiteral(b, *other_literal);
   const auto node_inputs = node->inputs();
   xla::XlaOp pred;
   switch (node->kind()) {
     case aten::gt: {
-      pred = b->Gt(operand, xla_other);
+      pred = Gt(operand, xla_other);
       break;
     }
     default:
       LOG(FATAL) << "Invalid binary operator kind: " << node->kind();
   }
-  return b->ConvertElementType(pred, xla::PrimitiveType::S8);
+  return ConvertElementType(pred, xla::PrimitiveType::S8);
 }
 
 at::optional<xla::XlaOp> build_type_as(
     const Node* node,
-    const xla::XlaOp& operand,
-    xla::XlaBuilder* b) {
+    const xla::XlaOp& operand) {
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
   const auto output_tensor_type = node_outputs[0]->type()->cast<TensorType>();
@@ -1114,7 +1114,7 @@ at::optional<xla::XlaOp> build_type_as(
   if (!target_type_maybe) {
     return at::nullopt;
   }
-  return b->ConvertElementType(operand, *target_type_maybe);
+  return ConvertElementType(operand, *target_type_maybe);
 }
 
 at::optional<xla::XlaOp> build_sum(
@@ -1125,9 +1125,9 @@ at::optional<xla::XlaOp> build_sum(
     LOG(INFO) << "Sum with keepdim set not supported yet";
     return at::nullopt;
   }
-  const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);
-  return b->Reduce(
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto xla_zero = ConstantLiteral(b, *zero_literal);
+  return Reduce(
       operand,
       xla_zero,
       CreateAddComputation(),
@@ -1184,7 +1184,7 @@ bool graph_is_supported(const Graph* graph) {
 
 // Create an identity operation of `ret` to make it the root of the computation.
 void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
-  b->GetTupleElement(b->Tuple({ret}), 0);
+  GetTupleElement(Tuple(b, {ret}), 0);
 }
 
 } // namespace
@@ -1209,7 +1209,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     Value* graph_input = graph_inputs[parameter_number];
     const auto it_ok = node_xla_ops.emplace(
         graph_input->unique(),
-        b.Parameter(
+        Parameter(
+            &b,
             parameter_number,
             parameter_shapes[parameter_number],
             "parameter_" + std::to_string(parameter_number)));
@@ -1223,8 +1224,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        xla::XlaOp xla_output =
-            build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
+        xla::XlaOp xla_output = build_binary_op(node, *XLA_OP(0), *XLA_OP(1));
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1235,7 +1235,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        xla::XlaOp xla_output = build_compare_op(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_compare_op(node, *XLA_OP(0));
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1243,7 +1243,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::type_as: {
         CHECK_EQ(node->inputs().size(), 2);
-        const auto xla_output_maybe = build_type_as(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_type_as(node, *XLA_OP(0));
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1262,10 +1262,10 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
 
         xla::XlaOp xla_output;
         if (XLA_OP(2)) { // bias exists
-          xla_output = build_convolution_bias(
-              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+          xla_output =
+              build_convolution_bias(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2));
         } else {
-          xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
+          xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1));
         }
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -1275,13 +1275,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::thnn_conv2d_backward: {
         CHECK_EQ(node->inputs().size(), 5);
         const auto conv2d_grads = build_thnn_conv2d_backward(
-            node,
-            *XLA_OP(0),
-            *XLA_OP(1),
-            *XLA_OP(2),
-            *XLA_OP(3),
-            *XLA_OP(4),
-            &b);
+            node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), *XLA_OP(3), *XLA_OP(4));
         const auto node_outputs = node->outputs();
         {
           const auto it_ok = node_xla_ops.emplace(
@@ -1302,7 +1296,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::t: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = b.Transpose(*XLA_OP(0), {1, 0});
+        xla::XlaOp xla_output = Transpose(*XLA_OP(0), {1, 0});
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1313,8 +1307,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported linear layer";
           return at::nullopt;
         }
-        xla::XlaOp xla_output =
-            b.Add(b.Dot(*XLA_OP(1), *XLA_OP(2)), *XLA_OP(0));
+        xla::XlaOp xla_output = Dot(*XLA_OP(1), *XLA_OP(2)) + *XLA_OP(0);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1322,7 +1315,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::mm: {
         CHECK_EQ(node->inputs().size(), 2);
-        xla::XlaOp xla_output = b.Dot(*XLA_OP(0), *XLA_OP(1));
+        xla::XlaOp xla_output = Dot(*XLA_OP(0), *XLA_OP(1));
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1330,7 +1323,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::max_pool2d: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0));
         const auto current_unique =
             node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -1340,7 +1333,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::max_pool2d_backward: {
         CHECK_EQ(node->inputs().size(), 3);
         xla::XlaOp xla_output =
-            build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
+            build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1));
         const auto current_unique =
             node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -1349,7 +1342,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::avg_pool2d: {
         CHECK_EQ(node->inputs().size(), 1);
-        const auto xla_output_maybe = build_avg_pool2d(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_avg_pool2d(node, *XLA_OP(0));
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1362,7 +1355,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::avg_pool2d_backward: {
         CHECK_EQ(node->inputs().size(), 2);
         const auto xla_output_maybe =
-            build_avg_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
+            build_avg_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1));
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1374,9 +1367,9 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::relu: {
         CHECK_EQ(node->inputs().size(), 1);
-        const auto zero_literal = xla::Literal::CreateR0<float>(0);
-        const auto xla_zero = b.ConstantLiteral(*zero_literal);
-        xla::XlaOp xla_output = b.Max(*XLA_OP(0), xla_zero);
+        const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+        const auto xla_zero = ConstantLiteral(&b, *zero_literal);
+        xla::XlaOp xla_output = Max(*XLA_OP(0), xla_zero);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1384,7 +1377,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::threshold: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_threshold(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_threshold(node, *XLA_OP(0));
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1392,7 +1385,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::log_softmax: {
         CHECK_EQ(node->inputs().size(), 1);
-        const auto xla_output_maybe = build_log_softmax(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_log_softmax(node, *XLA_OP(0));
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1404,7 +1397,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::view: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_view(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_view(node, *XLA_OP(0));
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1412,7 +1405,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::expand: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_expand(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_expand(node, *XLA_OP(0));
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1428,7 +1421,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           }
           xla_ops.push_back(*xla_op);
         }
-        xla::XlaOp xla_output = build_stack(node, xla_ops, &b);
+        xla::XlaOp xla_output = build_stack(node, xla_ops);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1528,7 +1521,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       CHECK(it != node_xla_ops.end());
       returned_tuple.push_back(it->second);
     }
-    b.Tuple(returned_tuple);
+    Tuple(&b, returned_tuple);
   } else {
     const auto it = node_xla_ops.find(node_inputs[0]->unique());
     CHECK(it != node_xla_ops.end());
