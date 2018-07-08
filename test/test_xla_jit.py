@@ -359,8 +359,7 @@ class TestGradients(TestCase):
 
         if xla:
             for i, (grad_input_jit, grad_input_xla) in enumerate(zip(grad_inputs, grad_inputs_xla)):
-                # TODO: 1e2 is not acceptable, investigate
-                self.assertEqual(grad_input_jit, grad_input_xla, 1e2)
+                self.assertEqual(grad_input_jit, grad_input_xla, 1e-4)
 
     def test_avgpool(self):
         class AvgPoolGrad(nn.Module):

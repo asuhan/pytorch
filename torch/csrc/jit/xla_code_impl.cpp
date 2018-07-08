@@ -964,7 +964,7 @@ xla::XlaOp build_stack(
 struct BatchNormOutput {
   xla::XlaOp output;
   xla::XlaOp save_mean; // batch_mean
-  xla::XlaOp save_std;  // batch_var
+  xla::XlaOp save_invstd_eps;  // 1 / sqrt(batch_var + eps)
 };
 
 
@@ -974,11 +974,20 @@ BatchNormOutput build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto eps = node->f(attr::eps);
-  auto outputs = b->BatchNormTraining(input, weight, bias, eps, 1);
-  return {b->GetTupleElement(outputs, 2),
-      b->GetTupleElement(outputs, 1),
-      b->GetTupleElement(outputs, 0)};
+  const auto epsf = node->f(attr::eps);
+  const auto eps_literal = xla::Literal::CreateR0<float>(epsf);
+  const auto eps = b->ConstantLiteral(*eps_literal);
+  const auto one_literal = xla::Literal::CreateR0<float>(1.0f);
+  const auto one = b->ConstantLiteral(*one_literal);
+  const auto half_literal = xla::Literal::CreateR0<float>(0.5f);
+  const auto half = b->ConstantLiteral(*half_literal);
+
+  auto outputs = b->BatchNormTraining(input, weight, bias, epsf, 1);
+  auto output = b->GetTupleElement(outputs, 2);
+  auto save_mean = b->GetTupleElement(outputs, 1);
+  auto save_var = b->GetTupleElement(outputs, 0);
+  auto save_invstd_eps = b->Div(one, b->Pow(half, b->Add(save_var, eps)));
+  return {output, save_mean, save_invstd_eps};
 }
 
 struct BatchNormGrads {
@@ -993,10 +1002,17 @@ BatchNormGrads build_batch_norm_backward(
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
     const xla::XlaOp& save_mean,
-    const xla::XlaOp& save_var,
+    const xla::XlaOp& save_invstd_eps,
     xla::XlaBuilder* b) {
-  const auto eps = node->f(attr::eps);
-  const auto grads = b->BatchNormGrad(input, weight, save_mean, save_var, grad, eps, 1);
+  const auto epsf = node->f(attr::eps);
+  const auto eps_literal = xla::Literal::CreateR0<float>(epsf);
+  const auto eps = b->ConstantLiteral(*eps_literal);
+  const auto one_literal = xla::Literal::CreateR0<float>(1.0f);
+  const auto one = b->ConstantLiteral(*one_literal);
+  const auto two_literal = xla::Literal::CreateR0<float>(2.0f);
+  const auto two = b->ConstantLiteral(*two_literal);
+  const auto save_var = b->Sub(b->Pow(b->Div(one, save_invstd_eps), two), eps);
+  const auto grads = b->BatchNormGrad(input, weight, save_mean, save_var, grad, epsf, 1);
   const auto grad_input = b->GetTupleElement(grads, 0);
   const auto grad_weight = b->GetTupleElement(grads, 1);
   const auto grad_bias = b->GetTupleElement(grads, 2);
@@ -1351,7 +1367,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
 	  }
 	  {
 	    const auto it_ok = node_xla_ops.emplace(
-                node_outputs[2]->unique(), outputs.save_std);
+                node_outputs[2]->unique(), outputs.save_invstd_eps);
 	    CHECK(it_ok.second);
 	  }
 	}
