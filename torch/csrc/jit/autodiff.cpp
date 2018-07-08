@@ -18,7 +18,7 @@ bool hasOneValuedAttribute(Node *n, torch::jit::Symbol name) {
 bool isDifferentiable(Node * n) {
   static std::unordered_set<Symbol> differentiable_kinds = {
     aten::add, aten::sub, aten::mul, prim::Constant, prim::ReplaceIfUndef,
-    aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg,
+    aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg, aten::view,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
     aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd,
     aten::thnn_conv2d_forward, aten::thnn_batch_norm_forward
