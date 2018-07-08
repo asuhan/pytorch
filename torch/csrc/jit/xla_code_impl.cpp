@@ -525,9 +525,8 @@ Conv2DGrads build_thnn_conv2d_backward(
       node, grad, input, weight, finput, fweight, b);
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
-  const auto grad_bias = b->Reduce(grad, xla_zero,
-				CreateAddComputation(),
-				{0, 2, 3});
+  const auto grad_bias =
+      b->Reduce(grad, xla_zero, CreateAddComputation(), {0, 2, 3});
   return {grad_input, grad_weight, grad_bias};
 }
 
@@ -964,9 +963,8 @@ xla::XlaOp build_stack(
 struct BatchNormOutput {
   xla::XlaOp output;
   xla::XlaOp save_mean; // batch_mean
-  xla::XlaOp save_invstd_eps;  // 1 / sqrt(batch_var + eps)
+  xla::XlaOp save_invstd_eps; // 1 / sqrt(batch_var + eps)
 };
-
 
 BatchNormOutput build_batch_norm(
     const Node* node,
@@ -1012,7 +1010,8 @@ BatchNormGrads build_batch_norm_backward(
   const auto two_literal = xla::Literal::CreateR0<float>(2.0f);
   const auto two = b->ConstantLiteral(*two_literal);
   const auto save_var = b->Sub(b->Pow(b->Div(one, save_invstd_eps), two), eps);
-  const auto grads = b->BatchNormGrad(input, weight, save_mean, save_var, grad, epsf, 1);
+  const auto grads =
+      b->BatchNormGrad(input, weight, save_mean, save_var, grad, epsf, 1);
   const auto grad_input = b->GetTupleElement(grads, 0);
   const auto grad_weight = b->GetTupleElement(grads, 1);
   const auto grad_bias = b->GetTupleElement(grads, 2);
@@ -1345,37 +1344,37 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::thnn_batch_norm_forward:
       case aten::batch_norm: {
         CHECK_EQ(node->inputs().size(), 5);
-	const auto outputs =
-	  build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+        const auto outputs =
+            build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         const auto node_outputs = node->outputs();
         {
           current_unique = node_outputs[0]->unique();
-          const auto it_ok = node_xla_ops.emplace(
-              node_outputs[0]->unique(), outputs.output);
+          const auto it_ok =
+              node_xla_ops.emplace(node_outputs[0]->unique(), outputs.output);
           CHECK(it_ok.second);
         }
-	if (node->kind() == aten::batch_norm) {
-	  CHECK_EQ(node->outputs().size(), 1);
-	}
-	// aten::batch_norm only has 1 output
-	// thnn_batch_norm_forward has output, save_mean, save_std
-	if (node->kind() == aten::thnn_batch_norm_forward) {
-	  {
-	    const auto it_ok = node_xla_ops.emplace(
+        if (node->kind() == aten::batch_norm) {
+          CHECK_EQ(node->outputs().size(), 1);
+        }
+        // aten::batch_norm only has 1 output
+        // thnn_batch_norm_forward has output, save_mean, save_std
+        if (node->kind() == aten::thnn_batch_norm_forward) {
+          {
+            const auto it_ok = node_xla_ops.emplace(
                 node_outputs[1]->unique(), outputs.save_mean);
-	    CHECK(it_ok.second);
-	  }
-	  {
-	    const auto it_ok = node_xla_ops.emplace(
+            CHECK(it_ok.second);
+          }
+          {
+            const auto it_ok = node_xla_ops.emplace(
                 node_outputs[2]->unique(), outputs.save_invstd_eps);
-	    CHECK(it_ok.second);
-	  }
-	}
+            CHECK(it_ok.second);
+          }
+        }
         break;
       }
       case aten::thnn_batch_norm_backward: {
         CHECK_EQ(node->inputs().size(), 7);
-	auto grads = build_batch_norm_backward(
+        auto grads = build_batch_norm_backward(
             node,
             *XLA_OP(0), // grad_output
             *XLA_OP(1), // input
@@ -1386,8 +1385,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         const auto node_outputs = node->outputs();
         {
           current_unique = node_outputs[0]->unique();
-          const auto it_ok = node_xla_ops.emplace(
-              node_outputs[0]->unique(), grads.grad_input);
+          const auto it_ok =
+              node_xla_ops.emplace(node_outputs[0]->unique(), grads.grad_input);
           CHECK(it_ok.second);
         }
         {
@@ -1396,8 +1395,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           CHECK(it_ok.second);
         }
         {
-          const auto it_ok = node_xla_ops.emplace(
-              node_outputs[2]->unique(), grads.grad_bias);
+          const auto it_ok =
+              node_xla_ops.emplace(node_outputs[2]->unique(), grads.grad_bias);
           CHECK(it_ok.second);
         }
         break;
