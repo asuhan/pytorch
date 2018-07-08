@@ -37,6 +37,7 @@ bool isDifferentiable(Node * n) {
     "aten::chunk(Tensor self, int chunks, int dim) -> Tensor[]",
     "aten::split(Tensor self, int split_size, int dim) -> Tensor[]",
     "aten::type_as(Tensor self, Tensor other) -> Tensor",
+    "aten::view(Tensor self, int[] size) -> Tensor",
     "aten::unsqueeze(Tensor self, int dim) -> Tensor",
     "aten::mm(Tensor self, Tensor mat2) -> Tensor",
     "aten::lt(Tensor self, Tensor other) -> Tensor",
