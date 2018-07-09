@@ -1065,7 +1065,7 @@ BatchNormOutput build_batch_norm(
   auto output = b->GetTupleElement(outputs, 0);
   auto save_mean = b->GetTupleElement(outputs, 1);
   auto save_var = b->GetTupleElement(outputs, 2);
-  auto save_invstd_eps = b->Div(one, b->Pow(half, b->Add(save_var, eps)));
+  auto save_invstd_eps = b->Div(one, b->Pow(b->Add(save_var, eps), half));
   return {output, save_mean, save_invstd_eps};
 }
 
