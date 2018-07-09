@@ -981,10 +981,10 @@ BatchNormOutput build_batch_norm(
   const auto half = b->ConstantLiteral(*half_literal);
 
   auto outputs = b->BatchNormTraining(input, weight, bias, epsf, 1);
+  auto output = b->GetTupleElement(outputs, 0);
+  auto save_mean = b->GetTupleElement(outputs, 1);
   auto save_var = b->GetTupleElement(outputs, 2);
   auto save_invstd_eps = b->Div(one, b->Pow(half, b->Add(save_var, eps)));
-  auto save_mean = b->GetTupleElement(outputs, 1);
-  auto output = b->GetTupleElement(outputs, 0);
   return {output, save_mean, save_invstd_eps};
 }
 
@@ -1100,6 +1100,11 @@ bool graph_is_supported(const Graph* graph) {
     }
   }
   return true;
+}
+
+// Create an identity operation of `ret` to make it the root of the computation.
+void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
+  b->GetTupleElement(b->Tuple({ret}), 0);
 }
 
 } // namespace
@@ -1427,6 +1432,12 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       returned_tuple.push_back(it->second);
     }
     b.Tuple(returned_tuple);
+  } else {
+    const auto it = node_xla_ops.find(current_unique);
+    CHECK(it != node_xla_ops.end());
+    const auto ret = it->second;
+    // Ensure that the returned value is the root of the computation.
+    activate_return_node(ret, &b);
   }
   return b.Build().ValueOrDie();
 }
