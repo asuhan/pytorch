@@ -20,6 +20,7 @@
 #include "torch/csrc/jit/passes/loop_unrolling.h"
 #include "torch/csrc/jit/passes/specialize_undef.h"
 #include "torch/csrc/jit/passes/unwrap_buffered_functions.h"
+#include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/graph_executor.h"
 #include "torch/csrc/jit/script/init.h"
 #include "torch/csrc/jit/script/python_tree_views.h"
@@ -106,6 +107,7 @@ void initJITBindings(PyObject *module) {
    .def("_jit_pass_fixup_onnx_loops", FixupONNXLoops)
    .def("_jit_pass_decompose_addmm", DecomposeAddmm)
    .def("_jit_pass_unwrap_buffered_functions", UnwrapBufferedFunctions)
+   .def("_jit_pass_constant_fold", ConstantFold)
    .def("_jit_pass_specialize_undef", specializeUndef)
    .def("_jit_differentiate", [](Graph &g, const std::vector<bool>& requires_grad) {
        // the python binding slightly differs in semantics
