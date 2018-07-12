@@ -1325,6 +1325,14 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK(it_ok.second);
         break;
       }
+      case aten::mm: {
+        CHECK_EQ(node->inputs().size(), 2);
+        xla::XlaOp xla_output = b.Dot(*XLA_OP(0), *XLA_OP(1));
+        current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
       case aten::max_pool2d_with_indices: {
         CHECK_GE(node->inputs().size(), 1);
         xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);

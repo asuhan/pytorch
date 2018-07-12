@@ -5,8 +5,11 @@ from common import TestCase, run_tests
 import unittest
 
 
-def _xla_run(model, input):
+def _xla_run(model, input, decompose_addmm=False):
     traced_model = torch.jit.trace(input)(model)
+    if decompose_addmm:
+        fwd = traced_model._get_method('forward')
+        torch._C._jit_pass_decompose_addmm(fwd.graph)
     return torch._C._to_xla_module(traced_model)(input)
 
 
@@ -144,11 +147,12 @@ class TestLinear(TestCase):
             def forward(self, x):
                 return self.linear(x)
 
-        x = torch.rand(4, 2)
-        model = XlaLinear()
-        out = _xla_run(model, x)
-        expected = model(x)
-        self.assertEqual(out.data, expected.data)
+        for decompose_addmm in [False, True]:
+            x = torch.rand(4, 2)
+            model = XlaLinear()
+            out = _xla_run(model, x, decompose_addmm)
+            expected = model(x)
+            self.assertEqual(out.data, expected.data)
 
 
 class TestConv(TestCase):
