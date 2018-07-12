@@ -3,7 +3,6 @@
 #include "tensorflow/core/kernels/conv_grad_ops.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
-#include "torch/csrc/jit/passes/remove_expands.h"
 
 namespace {
 
@@ -103,7 +102,6 @@ namespace torch {
 namespace jit {
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
-  RemoveExpands(graph_);
   ConstantFold(graph_);
   EliminateDeadCode(graph_);
 }
@@ -528,22 +526,6 @@ Conv2DGrads build_thnn_conv2d_backward(
   const auto grad_bias =
       b->Reduce(grad, xla_zero, CreateAddComputation(), {0, 2, 3});
   return {grad_input, grad_weight, grad_bias};
-}
-
-xla::XlaOp build_addmm(
-    const Node* node,
-    const xla::XlaOp& bias,
-    const xla::XlaOp& weights,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
-  const auto node_inputs = node->inputs();
-  const auto bias_size = tensor_sizes(node_inputs[0]);
-  CHECK_EQ(bias_size.size(), 1);
-  std::vector<int64> reshaped_bias_sizes;
-  reshaped_bias_sizes.push_back(1);
-  reshaped_bias_sizes.push_back(bias_size.front());
-  xla::XlaOp dot = b->Dot(weights, input);
-  return b->Add(dot, b->Reshape(bias, reshaped_bias_sizes));
 }
 
 xla::XlaComputation CreateMaxComputation() {
@@ -1166,16 +1148,28 @@ bool graph_is_supported(const Graph* graph) {
   // Index output of max_pool2d must not be used, not implemented yet.
   std::unordered_set<size_t> must_be_unused;
   for (const auto node : nodes) {
-    if (node->kind() == aten::max_pool2d) {
-      const auto node_outputs = node->outputs();
-      must_be_unused.emplace(node_outputs[1]->unique());
+    const auto node_outputs = node->outputs();
+    switch (node->kind()) {
+      case aten::thnn_conv2d_forward: {
+        CHECK_EQ(node_outputs.size(), 3);
+        must_be_unused.emplace(node_outputs[1]->unique());
+        must_be_unused.emplace(node_outputs[2]->unique());
+        break;
+      }
+      case aten::max_pool2d: {
+        CHECK_EQ(node_outputs.size(), 2);
+        must_be_unused.emplace(node_outputs[1]->unique());
+        break;
+      }
+      default:
+        break;
     }
   }
   for (const auto node : nodes) {
     for (const auto input : node->inputs()) {
       const auto it = must_be_unused.find(input->unique());
       if (it != must_be_unused.end()) {
-        LOG(INFO) << "Graph not supported; index output of max_pool2d is used.";
+        LOG(INFO) << "Graph not supported; unsupported output is used.";
         return false;
       }
     }
@@ -1269,7 +1263,9 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         } else {
           xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
         }
-        current_unique = output_id(node);
+        const auto node_outputs = node->outputs();
+        CHECK(!node_outputs.empty());
+        current_unique = node_outputs[0]->unique();
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
@@ -1317,7 +1313,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
         xla::XlaOp xla_output =
-            build_addmm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+            b.Add(b.Dot(*XLA_OP(1), *XLA_OP(2)), *XLA_OP(0));
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
