@@ -4,7 +4,6 @@
 #include "torch/csrc/jit/autodiff.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/dead_code_elimination.h"
-#include "torch/csrc/jit/passes/remove_expands.h"
 
 namespace {
 
@@ -104,7 +103,6 @@ namespace torch {
 namespace jit {
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
-  RemoveExpands(graph_);
   // ConstantFold(graph_);
   EliminateDeadCode(graph_);
 }
@@ -530,22 +528,6 @@ Conv2DGrads build_thnn_conv2d_backward(
   const auto grad_bias =
       b->Reduce(grad, xla_zero, CreateAddComputation(), {0, 2, 3});
   return {grad_input, grad_weight, grad_bias};
-}
-
-xla::XlaOp build_addmm(
-    const Node* node,
-    const xla::XlaOp& bias,
-    const xla::XlaOp& weights,
-    const xla::XlaOp& input,
-    xla::XlaBuilder* b) {
-  const auto node_inputs = node->inputs();
-  const auto bias_size = tensor_sizes(node_inputs[0]);
-  CHECK_EQ(bias_size.size(), 1);
-  std::vector<int64> reshaped_bias_sizes;
-  reshaped_bias_sizes.push_back(1);
-  reshaped_bias_sizes.push_back(bias_size.front());
-  xla::XlaOp dot = b->Dot(weights, input);
-  return b->Add(dot, b->Reshape(bias, reshaped_bias_sizes));
 }
 
 xla::XlaComputation CreateMaxComputation() {
@@ -993,8 +975,7 @@ xla::XlaOp build_expand(
   // Broadcast the squeezed tensor, the additional dimensions are to the left.
   std::vector<int64> broadcast_sizes;
   for (size_t i = 0; i < input_sizes.size(); ++i) {
-    if (output_sizes[i] != input_sizes[i]) {
-      CHECK_EQ(input_sizes[i], 1);
+    if (input_sizes[i] == 1) {
       broadcast_sizes.push_back(output_sizes[i]);
     }
   }
@@ -1338,7 +1319,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
         xla::XlaOp xla_output =
-            build_addmm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+            b.Add(b.Dot(*XLA_OP(1), *XLA_OP(2)), *XLA_OP(0));
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
