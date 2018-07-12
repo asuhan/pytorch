@@ -1137,6 +1137,23 @@ at::optional<xla::XlaOp> build_type_as(
   return b->ConvertElementType(operand, *target_type_maybe);
 }
 
+at::optional<xla::XlaOp> build_sum(
+    const Node* node,
+    const xla::XlaOp& operand,
+    xla::XlaBuilder* b) {
+  if (int_attr(node, attr::keepdim)) {
+    LOG(INFO) << "Sum with keepdim set not supported yet";
+    return at::nullopt;
+  }
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  return b->Reduce(
+      operand,
+      xla_zero,
+      CreateAddComputation(),
+      xla_i64_list(int_list_attr(node, attr::dim)));
+}
+
 at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
     const size_t input_index,
@@ -1492,6 +1509,18 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
               node_xla_ops.emplace(node_outputs[2]->unique(), grads.grad_bias);
           CHECK(it_ok.second);
         }
+        break;
+      }
+      case aten::sum: {
+        CHECK_GE(node->inputs().size(), 1);
+        const auto xla_output_maybe = build_sum(node, *XLA_OP(0), &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
+        CHECK(it_ok.second);
         break;
       }
       case prim::Constant:

@@ -289,6 +289,25 @@ class TestMNIST(TestCase):
         self.assertEqual(out.data, expected.data)
 
 
+class TestSum(TestCase):
+    def test(self):
+
+        class XlaSum(nn.Module):
+            def __init__(self, dim):
+                super(XlaSum, self).__init__()
+                self.dim = dim
+
+            def forward(self, x):
+                return x.sum(dim=self.dim)
+
+        x = torch.randn(2, 3, 4, 6)
+        for dim in range(0, x.dim()):
+            model = XlaSum(dim)
+            out = _xla_run(model, x)
+            expected = model(x)
+            self.assertEqual(out.data, expected.data)
+
+
 def _maybe_list(t):
     if isinstance(t, torch.Tensor):
         t = [t]
