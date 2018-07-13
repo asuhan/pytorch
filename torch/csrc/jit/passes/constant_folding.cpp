@@ -65,7 +65,8 @@ at::optional<ConstantEvaluator::IntList> ConstantEvaluator::evalAtenSize(
   }
   const auto tensor_sizes = tensor_type->sizes();
   const auto dim = node->i(attr::dim);
-  JIT_ASSERT(dim < tensor_sizes.size());
+  JIT_ASSERT(dim >= 0);
+  JIT_ASSERT(static_cast<size_t>(dim) < tensor_sizes.size());
   return ConstantEvaluator::IntList{tensor_sizes[dim]};
 }
 
