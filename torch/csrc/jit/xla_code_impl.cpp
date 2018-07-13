@@ -945,7 +945,7 @@ xla::XlaOp build_threshold(
       b->Gt(input, threshold), input, b->Broadcast(value, broadcast_sizes));
 }
 
-xla::XlaOp build_view(
+at::optional<xla::XlaOp> build_view(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
@@ -954,7 +954,20 @@ xla::XlaOp build_view(
   const auto input_sizes = tensor_sizes(node_inputs[0]);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
-  const auto output_sizes = tensor_sizes(node_outputs[0]);
+  std::vector<int64_t> output_sizes;
+  if (node_outputs[0]->type()->cast<TensorType>()) {
+    output_sizes = tensor_sizes(node_outputs[0]);
+  } else {
+    output_sizes = node->is(attr::size);
+  }
+  const auto it = std::find_if(
+      output_sizes.begin(), output_sizes.end(), [](const int64_t dim_size) {
+        return dim_size < 0;
+      });
+  if (it != output_sizes.end()) {
+    LOG(INFO) << "Cannot infer target size for aten::view";
+    return at::nullopt;
+  }
   return b->Reshape(input, xla_i64_list(output_sizes));
 }
 
@@ -1404,9 +1417,13 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::view: {
         CHECK_EQ(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_view(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_view(node, *XLA_OP(0), &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
         const auto current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
         break;
       }
