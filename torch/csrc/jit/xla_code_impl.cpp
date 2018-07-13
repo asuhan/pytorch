@@ -93,6 +93,8 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla(
       return tensor_to_xla_impl<float>(param_tensor, param_shape, client);
     case at::ScalarType::Long:
       return tensor_to_xla_impl<int64>(param_tensor, param_shape, client);
+    default:
+      LOG(FATAL) << "Tensor type not supported";
   }
 }
 
@@ -135,7 +137,6 @@ at::optional<std::vector<at::Tensor>> XlaCodeImpl::run(
   }
   const auto& computation = *compilation_result;
   std::vector<xla::GlobalData*> arguments;
-  int parameter_index = 0;
   for (int parameter_index = 0; parameter_index < parameter_shapes->size();
        ++parameter_index) {
     CHECK_LT(parameter_index, inputs.size());
@@ -1283,7 +1284,6 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             &b);
         const auto node_outputs = node->outputs();
         {
-          const auto current_unique = node_outputs[0]->unique();
           const auto it_ok = node_xla_ops.emplace(
               node_outputs[0]->unique(), conv2d_grads.grad_input);
           CHECK(it_ok.second);
@@ -1441,7 +1441,6 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         const auto node_outputs = node->outputs();
         {
-          const auto current_unique = node_outputs[0]->unique();
           const auto it_ok =
               node_xla_ops.emplace(node_outputs[0]->unique(), outputs.output);
           CHECK(it_ok.second);
@@ -1477,7 +1476,6 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             &b);
         const auto node_outputs = node->outputs();
         {
-          const auto current_unique = node_outputs[0]->unique();
           const auto it_ok =
               node_xla_ops.emplace(node_outputs[0]->unique(), grads.grad_input);
           CHECK(it_ok.second);
