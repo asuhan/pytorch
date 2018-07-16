@@ -265,18 +265,17 @@ class TestBatchNorm(TestCase):
 class XlaMNIST(nn.Module):
     def __init__(self):
         super(XlaMNIST, self).__init__()
-        # self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        # self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        # self.fc1 = nn.Linear(320, 50)
-        # self.fc2 = nn.Linear(50, 10)
+        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 10)
 
     def forward(self, x):
-        x = x * x
-        # x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        # x = F.relu(F.max_pool2d(self.conv2(x), 2))
-        # x = x.view(-1, 320)
-        # x = F.relu(self.fc1(x))
-        # x = self.fc2(x)
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2(x), 2))
+        x = x.view(-1, 320)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
 class TestMNIST(TestCase):
@@ -325,6 +324,18 @@ def _random_like(tensor_list):
             raise RuntimeError("Unsupported type: ", o.dtype)
     return random_tensors
 
+def _zeros_like(tensor_list):
+    zeros_tensors = []
+    for o in tensor_list:
+        if o.dtype == torch.float32 or o.dtype == torch.float64:
+            zeros_tensors += [torch.zeros(*o.shape, dtype=o.dtype)]
+        elif o.dtype == torch.int64:
+            # TODO remove this, we shouldn't be needing to pass zeros_tensor for long types
+            zeros_tensors += [torch.zeros_like(o)]
+        else:
+            raise RuntimeError("Unsupported type: ", o.dtype)
+    return zeros_tensors
+
 class TestGradients(TestCase):
     def checkGrad(self, model, inputs, grad_outputs='random', xla=True):
         inputs_params = inputs + list(model.parameters())
@@ -351,7 +362,7 @@ class TestGradients(TestCase):
         outputs = raw_outputs[:gradient.f_real_outputs]
 
         if grad_outputs == 'random':
-            grad_outputs = _random_like(raw_outputs)
+            grad_outputs = _random_like(outputs) + _zeros_like(raw_outputs[gradient.f_real_outputs:])
 
         raw_grad_outputs = []
         raw_grad_outputs += grad_outputs
@@ -377,6 +388,7 @@ class TestGradients(TestCase):
                                              only_inputs=True)
         for out_jit, out_autograd in zip(outputs, outputs_gt):
             self.assertEqual(out_jit, out_autograd)
+
         for grad_input_jit, grad_input_autograd in zip(grad_inputs, grad_inputs_gt):
             self.assertEqual(grad_input_jit, grad_input_autograd)
 
@@ -447,6 +459,7 @@ class TestGradients(TestCase):
                             inputs = [torch.randn(4, chans, 28, 28, requires_grad=True)]
                             self.checkGrad(model, inputs, xla=True)
 
+    @unittest.skip("Rebase wip")
     def test_mnist(self):
         model = XlaMNIST()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
