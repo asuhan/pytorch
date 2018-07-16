@@ -15,14 +15,15 @@ def _xla_run(model, input, decompose_addmm=False):
 def _forward_passes(graph):
     torch._C._jit_pass_decompose_addmm(graph)
     torch._C._jit_pass_unwrap_buffered_functions(graph)
+    torch._C._jit_pass_constant_fold(graph)
     torch._C._jit_pass_dce(graph)
 
 
 def _backward_passes(graph):
     defined = [True for i in graph.inputs()]
     torch._C._jit_pass_specialize_undef(graph, defined)
+    torch._C._jit_pass_constant_fold(graph)
     torch._C._jit_pass_dce(graph)
-
 
 class TestMulAdd(TestCase):
     def test(self):
@@ -336,13 +337,14 @@ def _zeros_like(tensor_list):
 
 class TestGradients(TestCase):
     def checkGrad(self, model, inputs, grad_outputs='random', xla=True):
-        inputs_params = inputs + list(model.parameters())
-        inputs_params_buffers = inputs_params + list(model._all_buffers())
 
         # Trace and symbolically differentiate
         traced_model = torch.jit.trace(*inputs)(model)
         fwd = traced_model._get_method('forward')
         _forward_passes(fwd.graph)
+
+        inputs_params = inputs + list(model.parameters())
+        inputs_params_buffers = inputs + list(fwd.params())
 
         inputs_require_grad = [i.requires_grad for i in inputs_params_buffers]
         gradient = torch._C._jit_differentiate(fwd.graph, inputs_require_grad)
