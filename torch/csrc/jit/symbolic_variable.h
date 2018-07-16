@@ -213,41 +213,8 @@ struct SymbolicVariable {
     n->t_(a("beta"), at::CPU(at::kFloat).scalarTensor(1.0));
     return r;
   }
-  static SymbolicVariable max_pool2d_backward(const SymbolicVariable grad,
-                                              const SymbolicVariable input,
-                                              const SymbolicVariable indices,
-                                              const std::vector<int64_t>& kernel_size,
-                                              const std::vector<int64_t>& stride,
-                                              const std::vector<int64_t>& padding,
-                                              const std::vector<int64_t>& dilation,
-                                              const bool ceil_mode) {
-    Node *n;
-    auto r = create(aten::max_pool2d_backward, {grad, input, indices}, 1, &n)[0];
-    n->is_(attr::kernel_size, kernel_size);
-    n->is_(attr::stride, stride);
-    n->is_(attr::padding, padding);
-    n->is_(attr::dilation, dilation);
-    n->i_(attr::ceil_mode, ceil_mode);
-    return r;
-  }
   Value * value() const {
     return v;
-  }
-  static SymbolicVariable avg_pool2d_backward(const SymbolicVariable grad,
-                                              const SymbolicVariable input,
-                                              const std::vector<int64_t>& kernel_size,
-                                              const std::vector<int64_t>& stride,
-                                              const std::vector<int64_t>& padding,
-                                              const bool ceil_mode,
-                                              const bool count_include_pad) {
-    Node *n;
-    auto r = create(aten::avg_pool2d_backward, {grad, input}, 1, &n)[0];
-    n->is_(attr::kernel_size, kernel_size);
-    n->is_(attr::stride, stride);
-    n->is_(attr::padding, padding);
-    n->i_(attr::ceil_mode, ceil_mode);
-    n->i_(attr::count_include_pad, count_include_pad);
-    return r;
   }
 private:
   SymbolicVariable typeLike(SymbolicVariable other) {
