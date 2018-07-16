@@ -208,22 +208,34 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       }
       case aten::max_pool2d: {
         JIT_ASSERT(grads.size() == 2);
-        return {SymbolicVariable::max_pool2d_backward(grads.at(0), inputs.at(0),
-                                                      outputs.at(1),
-                                                      node->is(attr::kernel_size),
-                                                      node->is(attr::stride),
-                                                      node->is(attr::padding),
-                                                      node->is(attr::dilation),
-                                                      node->i(attr::ceil_mode))};
+	auto graph = node->owningGraph();
+	auto poolNode = graph->create(aten::max_pool2d_backward, 1)
+	  ->is_(attr::kernel_size, node->is(attr::kernel_size))
+	  ->is_(attr::stride, node->is(attr::stride))
+	  ->is_(attr::padding, node->is(attr::padding))
+	  ->is_(attr::dilation, node->is(attr::dilation))
+          ->i_(attr::ceil_mode, node->i(attr::ceil_mode));
+	auto grad_out = grads.at(0);
+	poolNode->addInput(grad_out);
+	poolNode->addInput(inputs.at(0));
+	poolNode->addInput(outputs.at(1));
+	graph->insertNode(poolNode);
+	return fmap<SymbolicVariable>(poolNode->outputs());
       }
       case aten::avg_pool2d: {
         JIT_ASSERT(grads.size() == 1);
-        return {SymbolicVariable::avg_pool2d_backward(grads.at(0), inputs.at(0),
-                                                      node->is(attr::kernel_size),
-                                                      node->is(attr::stride),
-                                                      node->is(attr::padding),
-                                                      node->i(attr::ceil_mode),
-                                                      node->i(attr::count_include_pad))};
+	auto graph = node->owningGraph();
+	auto poolNode = graph->create(aten::avg_pool2d_backward, 1)
+	  ->is_(attr::kernel_size, node->is(attr::kernel_size))
+	  ->is_(attr::stride, node->is(attr::stride))
+	  ->is_(attr::padding, node->is(attr::padding))
+          ->i_(attr::count_include_pad, node->i(attr::count_include_pad))
+          ->i_(attr::ceil_mode, node->i(attr::ceil_mode));
+	auto grad_out = grads.at(0);
+	poolNode->addInput(grad_out);
+	poolNode->addInput(inputs.at(0));
+	graph->insertNode(poolNode);
+	return fmap<SymbolicVariable>(poolNode->outputs());
       }
       case aten::thnn_conv2d_forward: {
 	auto graph = node->owningGraph();
