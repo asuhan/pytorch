@@ -391,7 +391,7 @@ class TestGradients(TestCase):
                 for count_include_pad in [False, True]:
                     model = AvgPoolGrad(stride, padding, count_include_pad)
                     inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
-                    self.checkGrad(model, inputs)
+                    self.checkGrad(model, inputs, xla=True)
 
     def test_threshold(self):
         class ThresholdPoolGrad(nn.Module):
@@ -404,7 +404,7 @@ class TestGradients(TestCase):
 
         model = ThresholdPoolGrad()
         inputs = [torch.randn(4, 2, requires_grad=True)]
-        self.checkGrad(model, inputs)
+        self.checkGrad(model, inputs, xla=True)
 
 
     def test_maxpool(self):
@@ -414,7 +414,7 @@ class TestGradients(TestCase):
 
         model = MaxPoolGrad()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
-        self.checkGrad(model, inputs)
+        self.checkGrad(model, inputs, xla=True)
 
     def test_conv2d(self):
         for ichans in [1, 15, 32]:
@@ -439,7 +439,13 @@ class TestGradients(TestCase):
     def test_mnist(self):
         model = XlaMNIST()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
-        self.checkGrad(model, inputs, xla=False)
+        self.checkGrad(model, inputs, xla=True)
+
+    def test_resnet(self):
+        import torchvision
+        model = torchvision.models.resnet50()
+        inputs = [torch.randn(4, 3, 224, 224, requires_grad=True)]
+        self.checkGrad(model, inputs, xla=True)
 
 
 if __name__ == '__main__':
