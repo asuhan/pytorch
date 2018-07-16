@@ -21,7 +21,7 @@ bool isDifferentiable(Node * n) {
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg, aten::view,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
     aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd,
-    aten::thnn_conv2d_forward, aten::thnn_batch_norm_forward
+    aten::thnn_conv2d_forward, aten::thnn_batch_norm_forward, aten::log_softmax
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -257,6 +257,17 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
 	bnNode->addInput(outputs.at(2));
 	graph->insertNode(bnNode);
 	return fmap<SymbolicVariable>(bnNode->outputs());
+      }
+      case aten::log_softmax: {
+	auto graph = node->owningGraph();
+	auto thisNode = graph->create(aten::log_softmax_backward_data, 1)
+	                   ->i_(attr::dim, node->i(attr::dim));
+	auto grad_out = grads.at(0);
+	thisNode->addInput(grad_out);
+	thisNode->addInput(outputs.at(0));
+	thisNode->addInput(inputs.at(0));
+	graph->insertNode(thisNode);
+	return fmap<SymbolicVariable>(thisNode->outputs());
       }
     }
     throw std::runtime_error(std::string("don't support differentiation of `") +
