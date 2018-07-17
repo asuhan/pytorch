@@ -3,6 +3,7 @@ from torch import Tensor
 from torch.autograd import Variable, function
 from torch.nn import Module, ModuleList, ParameterList, Parameter, Sequential
 from torch.jit.frontend import get_jit_ast
+from torch.optim.optimizer import Optimizer
 from torch._six import raise_from, with_metaclass
 from collections import defaultdict, OrderedDict, namedtuple
 import sys
@@ -303,6 +304,12 @@ def trace(*args, **kwargs):
         if isinstance(func, torch.nn.Module):
             module = TopLevelTracedModule(func, **executor_options)
             module._create_method_from_trace('forward', func, args)
+            return module
+        elif isinstance(func, torch.optim.Optimizer):
+            def step_func(t=None):
+                return func.step(lambda:t)
+            module = OptimizerModule(func, **executor_options)
+            module._create_method_from_trace('step', step_func, args)
             return module
         else:
             return torch._C.GraphExecutor(func, args, **executor_options)
@@ -682,6 +689,91 @@ class TracedModule(ScriptModule):
     def __setattr__(self, attr, value):
         if not self.__frozen or hasattr(self, attr):
             return super(TracedModule, self).__setattr__(attr, value)
+        raise RuntimeError("Cannot set new properties on a traced module.")
+
+
+class OptimizerScriptModule(with_metaclass(ScriptMeta, Module, torch._C.ScriptModule)):
+    def __init__(self, optimize=True):
+        # must be before Module.init since the field is used in __getattr__
+        Module.__init__(self)
+        self.state = defaultdict(dict)
+        self.param_groups = []
+
+    def __getattr__(self, attr):
+        if self._has_method(attr):
+            if attr in self.__class__._original_methods:
+                original_method = self.__class__._original_methods[attr]
+                script_method = self._get_method(attr)
+                return functools.wraps(original_method)(script_method)
+            else:
+                return self._get_method(attr)
+        return Module.__getattr__(self, attr)
+
+    def __setattr__(self, attr, value):
+        if attr not in self._constants_set:
+            return super(OptimizerScriptModule, self).__setattr__(attr, value)
+        if hasattr(self, attr):
+            raise RuntimeError("attempting to re-assign constant '{}'".format(attr))
+        if isinstance(value, ModuleList):
+            # special case for list of modules. Modules need to be registered with their
+            # parent module. To do this, we create a ConstModuleList, which is itself a module, that
+            # contains each of these modules as submodules. The ConstModuleList then
+            # is set as an attribute of the parent module.
+            super(OptimizerScriptModule, self).__setattr__(attr, _ConstModuleList(value))
+        elif isinstance(value, Sequential):
+            super(OptimizerScriptModule, self).__setattr__(attr, _ConstSequential(value))
+        else:
+            super(OptimizerScriptModule, self).__setattr__(attr, _get_valid_constant(value))
+
+    def __dir__(self):
+        return sorted(Module.__dir__(self) + self._method_names())
+
+    # Module already has this method defined, so we
+    # need to override it and send it through the OptimizerScriptModule lookup
+    def step(self, *args, **kwargs):
+        return self.__getattr__('step')(*args, **kwargs)
+
+    def define(self, lang):
+        rcb = createResolutionCallback(frames_up=1)
+        self._define(lang, rcb, True)
+
+
+class OptimizerModule(OptimizerScriptModule):
+    __frozen = False
+
+    def __init__(self, orig, id_set=None, optimize=True):
+        super(OptimizerModule, self).__init__(optimize=True)
+        if id_set is None:
+            id_set = set()
+
+        def check_unique(param):
+            if param in id_set:
+                raise ValueError("OptimizerModule don't support parameter sharing between modules")
+            id_set.add(param)
+
+        for name, state_elem in orig.state.items():
+            if state_elem is not None:
+                self.state[name] = state_elem
+                check_unique(state_elem)
+        for param in orig.param_groups:
+            if param is not None:
+                self.param_groups.append(param)
+        self._orig_class = type(orig)
+
+        self._freeze()
+
+    def forward(self, *args, **kwargs):
+        raise RuntimeError('Trace submodules cannot be called.')
+
+    def _freeze(self):
+        self.__frozen = True
+
+    def _get_name(self):
+        return 'OptimizerModule[' + self._orig_class.__name__ + ']'
+
+    def __setattr__(self, attr, value):
+        if not self.__frozen or hasattr(self, attr):
+            return super(OptimizerModule, self).__setattr__(attr, value)
         raise RuntimeError("Cannot set new properties on a traced module.")
 
 
