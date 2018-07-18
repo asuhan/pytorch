@@ -352,6 +352,19 @@ xla::XlaOp build_thnn_conv2d_backward_input(
       padding_config);
 }
 
+xla::PaddingConfig make_padding_config(const std::vector<int64_t> padding) {
+  xla::PaddingConfig padding_config;
+  for (int i = 0; i < 2; ++i) {
+    padding_config.add_dimensions();
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto* dims = padding_config.add_dimensions();
+    dims->set_edge_padding_low(padding[i]);
+    dims->set_edge_padding_high(padding[i]);
+  }
+  return padding_config;
+}
+
 xla::XlaOp build_thnn_conv2d_backward_weight(
     const Node* node,
     const xla::XlaOp& grad,
@@ -470,15 +483,7 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
   }
 
   // Redo the initial input padding.
-  xla::PaddingConfig padding_config;
-  for (int i = 0; i < 2; ++i) {
-    padding_config.add_dimensions();
-  }
-  for (int i = 0; i < 2; ++i) {
-    auto* dims = padding_config.add_dimensions();
-    dims->set_edge_padding_low(padding_attr[i]);
-    dims->set_edge_padding_high(padding_attr[i]);
-  }
+  const auto padding_config = make_padding_config(padding_attr);
 
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
@@ -564,18 +569,17 @@ xla::XlaOp build_max_pool2d(
     window_strides.insert(
         window_strides.end(), stride_attr.begin(), stride_attr.end());
   }
-  const auto spatial_padding = make_padding(node);
-  std::vector<std::pair<int64, int64>> window_padding;
-  window_padding.resize(2);
-  window_padding.insert(
-      window_padding.end(), spatial_padding.begin(), spatial_padding.end());
-  return b->ReduceWindowWithGeneralPadding(
-      input,
-      b->ConstantLiteral(init_value),
+  const auto padding_config =
+      make_padding_config(int_list_attr(node, attr::padding));
+  const auto xla_init_value = b->ConstantLiteral(init_value);
+  const auto padded_input = b->Pad(input, xla_init_value, padding_config);
+  return b->ReduceWindow(
+      padded_input,
+      xla_init_value,
       max_computation,
       window_dimensions,
       window_strides,
-      window_padding);
+      xla::Padding::kValid);
 }
 
 xla::XlaComputation CreateGeComputation() {
@@ -656,17 +660,9 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   std::vector<int64> window_strides;
   window_strides.resize(2, 1);
   window_strides.insert(window_strides.end(), stride.begin(), stride.end());
-  const auto padding = xla_i64_list(int_list_attr(node, attr::padding));
+  const auto padding = int_list_attr(node, attr::padding);
   CHECK_EQ(padding.size(), 2);
-  xla::PaddingConfig padding_config;
-  for (int i = 0; i < 2; ++i) {
-    padding_config.add_dimensions();
-  }
-  for (int i = 0; i < 2; ++i) {
-    auto* dims = padding_config.add_dimensions();
-    dims->set_edge_padding_low(padding[i]);
-    dims->set_edge_padding_high(padding[i]);
-  }
+  const auto padding_config = make_padding_config(padding);
   const auto add_computation = CreateAddComputation();
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
