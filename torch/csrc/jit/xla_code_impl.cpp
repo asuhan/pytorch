@@ -242,10 +242,7 @@ xla::XlaOp build_convolution_bias(
 xla::XlaOp build_thnn_conv2d_backward_input(
     const Node* node,
     const xla::XlaOp& grad,
-    const xla::XlaOp& input,
     const xla::XlaOp& weight,
-    const xla::XlaOp& finput,
-    const xla::XlaOp& fweight,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), 9);
@@ -369,9 +366,6 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
     const Node* node,
     const xla::XlaOp& grad,
     const xla::XlaOp& input,
-    const xla::XlaOp& weight,
-    const xla::XlaOp& finput,
-    const xla::XlaOp& fweight,
     xla::XlaBuilder* b) {
   constexpr int n_dim = 0;
   constexpr int c_dim = 1;
@@ -521,14 +515,12 @@ Conv2DGrads build_thnn_conv2d_backward(
     const xla::XlaOp& grad,
     const xla::XlaOp& input,
     const xla::XlaOp& weight,
-    const xla::XlaOp& finput,
-    const xla::XlaOp& fweight,
     xla::XlaBuilder* b) {
-  const auto grad_input = build_thnn_conv2d_backward_input(
-      node, grad, input, weight, finput, fweight, b);
+  const auto grad_input =
+      build_thnn_conv2d_backward_input(node, grad, weight, b);
   // TODO: support weight and bias gradients
-  const auto grad_weight = build_thnn_conv2d_backward_weight(
-      node, grad, input, weight, finput, fweight, b);
+  const auto grad_weight =
+      build_thnn_conv2d_backward_weight(node, grad, input, b);
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
   const auto xla_zero = b->ConstantLiteral(*zero_literal);
   const auto grad_bias =
@@ -1305,13 +1297,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::thnn_conv2d_backward: {
         CHECK_EQ(node->inputs().size(), 9);
         const auto conv2d_grads = build_thnn_conv2d_backward(
-            node,
-            *XLA_OP(0),
-            *XLA_OP(1),
-            *XLA_OP(2),
-            *XLA_OP(6),
-            *XLA_OP(7),
-            &b);
+            node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         const auto node_outputs = node->outputs();
         {
           const auto it_ok = node_xla_ops.emplace(
