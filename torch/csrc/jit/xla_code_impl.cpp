@@ -239,6 +239,12 @@ xla::XlaOp build_convolution_bias(
   return b->Add(conv, bias_broadcast);
 }
 
+std::vector<int64> xla_shape_sizes(const xla::Shape& shape) {
+  std::vector<int64> shape_sizes(
+      shape.dimensions().begin(), shape.dimensions().end());
+  return shape_sizes;
+}
+
 xla::XlaOp build_thnn_conv2d_backward_input(
     const Node* node,
     const xla::XlaOp& grad,
@@ -254,10 +260,9 @@ xla::XlaOp build_thnn_conv2d_backward_input(
     input_size[2 + i] += 2 * padding_attr[i];
   }
   tensorflow::TensorShape input_shape(xla_i64_list(input_size));
-  const auto filter_size = xla_i64_list(tensor_sizes(node_inputs[2]));
-  std::vector<int64> filter_size_backward{
-      filter_size[2], filter_size[3], filter_size[1], filter_size[0]};
-  tensorflow::TensorShape filter_shape(filter_size_backward);
+  const auto filter = b->Transpose(weight, {2, 3, 1, 0});
+  const auto filter_size = xla_shape_sizes(b->GetShape(filter).ValueOrDie());
+  tensorflow::TensorShape filter_shape(filter_size);
   tensorflow::TensorShape out_backprop_shape(
       xla_i64_list(tensor_sizes(node_inputs[0])));
   const auto stride_attr = int_list_attr(node, attr::stride);
@@ -295,8 +300,8 @@ xla::XlaOp build_thnn_conv2d_backward_input(
 
   // TF filter shape is [ H, W, ..., inC, outC ]
   // Transpose the input and output features for computing the gradient.
-  dnums.set_kernel_input_feature_dimension(0);
-  dnums.set_kernel_output_feature_dimension(1);
+  dnums.set_kernel_input_feature_dimension(num_spatial_dims + 1);
+  dnums.set_kernel_output_feature_dimension(num_spatial_dims);
 
   std::vector<int64> kernel_spatial_dims(num_spatial_dims);
   std::vector<std::pair<int64, int64>> padding(num_spatial_dims);
@@ -306,10 +311,10 @@ xla::XlaOp build_thnn_conv2d_backward_input(
   for (int i = 0; i < num_spatial_dims; ++i) {
     int64 dim = 2 + i;
     dnums.add_input_spatial_dimensions(dim);
-    dnums.add_kernel_spatial_dimensions(dim);
+    dnums.add_kernel_spatial_dimensions(i);
     dnums.add_output_spatial_dimensions(dim);
 
-    kernel_spatial_dims[i] = dim;
+    kernel_spatial_dims[i] = i;
     padding[i] = {dims.spatial_dims[i].pad_before,
                   dims.spatial_dims[i].pad_after};
     lhs_dilation[i] = dims.spatial_dims[i].stride;
@@ -317,7 +322,7 @@ xla::XlaOp build_thnn_conv2d_backward_input(
   }
 
   // Mirror the filter in the spatial dimensions.
-  xla::XlaOp mirrored_weights = b->Rev(weight, kernel_spatial_dims);
+  xla::XlaOp mirrored_weights = b->Rev(filter, kernel_spatial_dims);
 
   // We'll need to undo the initial input padding once on the input backprop
   // result since edges are constant and have to be discarded for the gradient.
@@ -434,10 +439,10 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
 
   // Tensorflow filter shape is [ H, W, ..., inC, outC ].
   for (int i = 0; i < num_spatial_dims; ++i) {
-    dnums.add_output_spatial_dimensions(2 + i);
+    dnums.add_output_spatial_dimensions(i);
   }
-  dnums.set_output_batch_dimension(1);
-  dnums.set_output_feature_dimension(0);
+  dnums.set_output_batch_dimension(num_spatial_dims);
+  dnums.set_output_feature_dimension(num_spatial_dims + 1);
 
   for (int i = 0; i < num_spatial_dims; ++i) {
     int64 dim = 2 + i;
@@ -484,14 +489,16 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
 
   const auto padded_input = b->Pad(input, xla_zero, padding_config);
 
-  return b->ConvGeneralDilated(
-      padded_input,
-      grad,
-      window_strides,
-      padding,
-      /*lhs_dilation=*/ones,
-      rhs_dilation,
-      dnums);
+  return b->Transpose(
+      b->ConvGeneralDilated(
+          padded_input,
+          grad,
+          window_strides,
+          padding,
+          /*lhs_dilation=*/ones,
+          rhs_dilation,
+          dnums),
+      {3, 2, 0, 1});
 }
 
 struct Conv2DGrads {
