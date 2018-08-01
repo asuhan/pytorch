@@ -151,7 +151,8 @@ at::optional<std::vector<at::Tensor>> XlaCodeImpl::run(
         param_tensor, (*parameter_shapes)[parameter_index], &client_);
     arguments.push_back(data.release());
   }
-  auto result_literal = client_.ExecuteComputation(computation, arguments);
+  auto result_literal =
+      client_.ExecuteComputationAndTransfer(computation, arguments);
   if (xla::ShapeUtil::IsTuple(result_literal->shape())) {
     const auto tuple_elements = result_literal->DecomposeTuple();
     std::vector<at::Tensor> result_tensors;

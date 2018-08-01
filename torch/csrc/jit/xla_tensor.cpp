@@ -134,8 +134,8 @@ at::Tensor XLATensor::toTensor() {
   auto identity = b.Build().ValueOrDie();
 
   auto client_ = XlaGetClient();
-  auto result_literal =
-      client_->ExecuteComputation(identity, {data_.get(), zeros.data_.get()});
+  auto result_literal = client_->ExecuteComputationAndTransfer(
+      identity, {data_.get(), zeros.data_.get()});
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
   return autograd::make_variable(return_tensor);
 }

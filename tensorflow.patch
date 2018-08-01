@@ -64,7 +64,7 @@ new file mode 100644
 index 0000000000..152d0304ca
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.cc
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,103 @@
 +#include "tensorflow/compiler/xla/rpc/computation_client.h"
 +#include "grpc++/create_channel.h"
 +#include "grpc++/support/channel_arguments.h"
@@ -81,7 +81,11 @@ index 0000000000..152d0304ca
 +  std::unique_ptr<xla::GlobalData> TransferParameterToServer(
 +      const xla::Literal& literal) const;
 +
-+  std::unique_ptr<Literal> ExecuteComputation(
++  std::unique_ptr<GlobalData> ExecuteComputation(
++      const XlaComputation& computation,
++      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++
++  std::unique_ptr<Literal> ExecuteComputationAndTransfer(
 +      const XlaComputation& computation,
 +      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
 +
@@ -107,7 +111,21 @@ index 0000000000..152d0304ca
 +  client_.reset(new Client(stub_.get()));
 +}
 +
-+std::unique_ptr<Literal> XlaComputationClientImpl::ExecuteComputation(
++std::unique_ptr<GlobalData> XlaComputationClientImpl::ExecuteComputation(
++    const XlaComputation& computation,
++    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
++  ExecutionOptions eo;
++  *eo.mutable_debug_options() = legacy_flags::GetDebugOptionsFromFlags();
++  StatusOr<std::unique_ptr<GlobalData>> result_or_status =
++      client_->Execute(computation, arguments, &eo);
++  if (!result_or_status.ok()) {
++    LOG(FATAL) << result_or_status.status();
++  }
++  return std::move(result_or_status.ValueOrDie());
++}
++
++std::unique_ptr<Literal>
++XlaComputationClientImpl::ExecuteComputationAndTransfer(
 +    const XlaComputation& computation,
 +    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
 +  ExecutionOptions eo;
@@ -129,10 +147,16 @@ index 0000000000..152d0304ca
 +XlaComputationClient::XlaComputationClient()
 +    : pImpl(new XlaComputationClientImpl()) {}
 +
-+std::unique_ptr<Literal> XlaComputationClient::ExecuteComputation(
++std::unique_ptr<GlobalData> XlaComputationClient::ExecuteComputation(
 +    const XlaComputation& computation,
 +    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
 +  return pImpl->ExecuteComputation(computation, arguments);
++}
++
++std::unique_ptr<Literal> XlaComputationClient::ExecuteComputationAndTransfer(
++    const XlaComputation& computation,
++    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
++  return pImpl->ExecuteComputationAndTransfer(computation, arguments);
 +}
 +
 +std::unique_ptr<xla::GlobalData>
@@ -146,10 +170,10 @@ index 0000000000..152d0304ca
 +}  // namespace xla
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.h b/tensorflow/compiler/xla/rpc/computation_client.h
 new file mode 100644
-index 0000000000..961e93f168
+index 0000000000..4be5a0d76f
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,36 @@
 +#ifndef TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +#define TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +
@@ -171,7 +195,11 @@ index 0000000000..961e93f168
 +  std::unique_ptr<xla::GlobalData> TransferParameterToServer(
 +      const xla::Literal& literal) const;
 +
-+  std::unique_ptr<Literal> ExecuteComputation(
++  std::unique_ptr<GlobalData> ExecuteComputation(
++      const XlaComputation& computation,
++      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++
++  std::unique_ptr<Literal> ExecuteComputationAndTransfer(
 +      const XlaComputation& computation,
 +      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
 +
