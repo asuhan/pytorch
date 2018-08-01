@@ -111,9 +111,7 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
 
 } // namespace
 
-
 using namespace torch::jit;
-
 
 XLATensor::XLATensor(at::Tensor tensor) {
   auto client_ = XlaGetClient();
@@ -124,20 +122,21 @@ XLATensor::XLATensor(at::Tensor tensor) {
 }
 
 at::Tensor XLATensor::toTensor() {
-  // because there's no transferToClient, we'll define an `identity` graph, and execute it
-  // However, there's no easy way to build up an Identity graph, atleast with XLABuilder.
-  // The only way I see that's doable is X + Y, where Y is all zeros.
+  // because there's no transferToClient, we'll define an `identity` graph, and
+  // execute it However, there's no easy way to build up an Identity graph,
+  // atleast with XLABuilder. The only way I see that's doable is X + Y, where Y
+  // is all zeros.
   // TODO: remove hack and figure out how to return identity
   auto at_zeros = at::zeros(sizes);
   auto zeros = XLATensor(at_zeros);
-  
+
   xla::XlaBuilder b("identity");
   b.Add(b.Parameter(0, shape, "lhs"), b.Parameter(1, shape, "rhs"));
   auto identity = b.Build().ValueOrDie();
-  
+
   auto client_ = XlaGetClient();
-  auto result_literal = client_->ExecuteComputation(identity,
-						    {data_.get(), zeros.data_.get()});
+  auto result_literal =
+      client_->ExecuteComputation(identity, {data_.get(), zeros.data_.get()});
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
   return autograd::make_variable(return_tensor);
 }
