@@ -1,6 +1,7 @@
 #pragma once
 #include "torch/csrc/jit/script/module.h"
 #include "torch/csrc/jit/xla_code_impl.h"
+#include "torch/csrc/jit/xla_tensor.h"
 #include "torch/csrc/utils/disallow_copy.h"
 
 #include <memory>

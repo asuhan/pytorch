@@ -30,8 +30,9 @@ class XlaCodeImpl {
       const std::vector<xla::Shape>& parameter_shapes) const;
 
   std::shared_ptr<Graph> graph_;
-  xla::XlaComputationClient client_;
 };
+
+xla::XlaComputationClient* XlaGetClient();
 
 } // namespace jit
 } // namespace torch
