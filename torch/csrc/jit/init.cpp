@@ -34,6 +34,7 @@
 #ifdef WITH_XLA
 #include "torch/csrc/jit/script/module.h"
 #include "torch/csrc/jit/xla_module.h"
+#include "torch/csrc/jit/xla_tensor.h"
 #include "torch/csrc/jit/passes/xla.h"
 #endif  // WITH_XLA
 
@@ -167,6 +168,17 @@ void initJITBindings(PyObject *module) {
     .def_property_readonly("df_output_vjps", [](Gradient& m) {
       return m.df_output_vjps;
     });
+
+#ifdef WITH_XLA
+  py::class_<XLATensor>(m, "XLATensor")
+    .def(
+	 py::init([](at::Tensor tensor) {
+	     return XLATensor(tensor);
+	   }), py::arg("tensor"))
+    .def("to_tensor", [](XLATensor &s) {
+	return s.toTensor();
+      });
+#endif // WITH_XLA
 
   py::class_<GraphExecutorState>(m, "GraphExecutorState")
     .def_property_readonly("graph", [](GraphExecutorState& s) {

@@ -104,6 +104,12 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla(
 namespace torch {
 namespace jit {
 
+xla::XlaComputationClient client_;
+
+xla::XlaComputationClient* XlaGetClient() {
+  return &client_;
+}
+
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
   ConstantFold(graph_);
   EliminateDeadCode(graph_);
