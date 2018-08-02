@@ -12,16 +12,14 @@ namespace jit {
 struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   TH_DISALLOW_COPY_AND_ASSIGN(XlaModule);
 
-  XlaModule(
-      const std::shared_ptr<Graph>& graph,
-      const std::vector<at::Tensor>& model_parameters)
-      : xla_code_(graph), model_parameters_(model_parameters) {}
+  XlaModule(script::Module& module,
+	    std::vector<autograd::Variable>& inputs,
+	    bool backward=true);
 
-  std::vector<at::Tensor> run(const std::vector<at::Tensor>& inputs);
+  // std::vector<XLATensor> run(const std::vector<XLATensor>& inputs);
 
  private:
-  XlaCodeImpl xla_code_;
-  std::vector<at::Tensor> model_parameters_;
+  std::vector<std::shared_ptr<XLATensor>> params_;
 };
 
 } // namespace jit
