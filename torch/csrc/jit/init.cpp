@@ -29,7 +29,6 @@
 #include "torch/csrc/jit/script/module.h"
 #include "torch/csrc/jit/xla_module.h"
 #include "torch/csrc/jit/xla_tensor.h"
-#include "torch/csrc/jit/passes/xla.h"
 #endif  // WITH_XLA
 
 
@@ -116,14 +115,6 @@ void initJITBindings(PyObject *module) {
        auto g_clone = g.copy();
        return differentiate(g_clone, requires_grad);
    });
-#ifdef WITH_XLA
-   m.def("_to_xla_module", [](script::Module& module) {
-     return ToXLA(module);
-   });
-   m.def("_to_xla_module_grad", [](std::shared_ptr<Graph> graph) {
-     return ToXLAGrad(graph);
-   });
-#endif  // WITH_XLA
 
   py::class_<ArgumentSpec>(m, "ArgumentSpec")
       .def("__repr__", [](ArgumentSpec& self) {
@@ -171,10 +162,10 @@ void initJITBindings(PyObject *module) {
     });
 
 #ifdef WITH_XLA
-  py::class_<XLATensor>(m, "XLATensor")
+  py::class_<XLATensor, std::shared_ptr<XLATensor>>(m, "XLATensor")
     .def(
-	 py::init([](at::Tensor tensor) {
-	     return XLATensor(tensor);
+	 py::init([](autograd::Variable tensor) {
+	     return std::make_shared<XLATensor>(tensor);
 	   }), py::arg("tensor"))
     .def("to_tensor", [](XLATensor &s) {
 	return s.toTensor();

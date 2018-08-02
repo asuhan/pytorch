@@ -112,12 +112,13 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
 
 using namespace torch::jit;
 
-XLATensor::XLATensor(at::Tensor tensor) {
+XLATensor::XLATensor(autograd::Variable tensor) {
   auto client_ = XlaGetClient();
   sizes = tensor.sizes();
   dtype = *make_xla_primitive_type(tensor.type().scalarType());
   shape = make_xla_shape(tensor.sizes(), dtype);
   data_ = tensor_to_xla(tensor, shape, client_);
+  requires_grad = tensor.requires_grad();
 }
 
 at::Tensor XLATensor::toTensor() {
@@ -127,7 +128,7 @@ at::Tensor XLATensor::toTensor() {
   // is all zeros.
   // TODO: remove hack and figure out how to return identity
   auto at_zeros = at::zeros(sizes);
-  auto zeros = XLATensor(at_zeros);
+  XLATensor zeros(autograd::make_variable(at_zeros, false));
 
   xla::XlaBuilder b("identity");
   b.Add(b.Parameter(0, shape, "lhs"), b.Parameter(1, shape, "rhs"));
@@ -135,7 +136,7 @@ at::Tensor XLATensor::toTensor() {
 
   auto client_ = XlaGetClient();
   auto result_literal = client_->ExecuteComputationAndTransfer(
-      identity, {data_.get(), zeros.data_.get()});
+	       identity, {data_.get(), zeros.data_.get()});
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
-  return autograd::make_variable(return_tensor);
+  return autograd::make_variable(return_tensor, requires_grad);
 }
