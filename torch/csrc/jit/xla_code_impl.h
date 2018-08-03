@@ -21,7 +21,6 @@ class XlaCodeImpl {
   at::optional<std::vector<at::Tensor>> run(
       const std::vector<at::Tensor>& inputs) const;
 
- private:
   at::optional<std::vector<xla::Shape>> captureInputShapes(
       const std::vector<at::Tensor>& inputs) const;
 

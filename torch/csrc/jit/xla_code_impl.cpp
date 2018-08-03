@@ -111,8 +111,6 @@ xla::XlaComputationClient* XlaGetClient() {
 }
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
-  ConstantFold(graph_);
-  EliminateDeadCode(graph_);
 }
 
 namespace {

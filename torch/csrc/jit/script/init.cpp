@@ -400,15 +400,30 @@ Resolver pythonResolver(ResolutionCallback rcb) {
   };
 }
 #ifdef WITH_XLA
-std::vector<at::Tensor> createTensorList(py::tuple tuple, size_t reserve_extra_space = 0) {
-  std::vector<at::Tensor> result;
+std::vector<std::shared_ptr<XLATensor> > createTensorList(py::tuple tuple, size_t reserve_extra_space = 0) {
+  std::vector<std::shared_ptr<XLATensor> > result;
   result.reserve(tuple.size() + reserve_extra_space);
   for(auto e : tuple) {
-    auto variable = py::cast<autograd::Variable>(e);
-    result.push_back(variable.data());
+    auto variable = py::cast<std::shared_ptr<XLATensor> >(e);
+    result.push_back(variable);
   }
   return result;
 }
+
+py::object unpackXLATensorList(std::vector<std::shared_ptr<XLATensor> > outputs) {
+  if (outputs.size() == 0) {
+    return py::none();
+  } else if (outputs.size() == 1) {
+    return py::cast(outputs[0]);
+  } else {
+    py::tuple tuple(outputs.size());
+    for(size_t i = 0; i < outputs.size(); i++) {
+      tuple[i] = py::cast(outputs[i]);
+    }
+    return tuple;
+  }
+}
+
 #endif  // WITH_XLA
 
 void initJitScriptBindings(PyObject* module) {
@@ -591,15 +606,20 @@ void initJitScriptBindings(PyObject* module) {
     return compileFunction(typed_def, pythonResolver(rcb));
   });
 #ifdef WITH_XLA
-  py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule");
-    // .def("__call__", [](XlaModule& xla_module, py::args args) {
-    //   auto outputs = xla_module.run(createTensorList(args));
-    //   variable_tensor_list result;
-    //   for (auto output : outputs) {
-    //     result.push_back(autograd::make_variable(std::move(output), false));
-    //   }
-    //   return unpackVariableTensorList(std::move(result));
-    // });
+  py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule")
+    .def(
+	 py::init([](script::Module& module, std::vector<autograd::Variable>& inputs) {
+	     return std::make_shared<XlaModule>(module, inputs);
+	   }), py::arg("module"), py::arg("inputs"))
+    .def("__call__", [](XlaModule& xla_module, py::args args) -> py::object {
+	auto inputs = createTensorList(args);
+	auto outputs = xla_module.forward(inputs);
+	return unpackXLATensorList(outputs);
+      })
+    .def("backward", [](XlaModule& xla_module, py::args args) {
+	auto inputs = createTensorList(args);
+	xla_module.backward(inputs);
+      });
 #endif  // WITH_XLA
 
 }
