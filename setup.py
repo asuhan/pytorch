@@ -828,6 +828,7 @@ main_sources = [
 ]
 
 if WITH_XLA:
+    main_sources.append('torch/csrc/jit/passes/xla_remove_unused.cpp')
     main_sources.append('torch/csrc/jit/xla_code_impl.cpp')
     main_sources.append('torch/csrc/jit/xla_module.cpp')
     main_sources.append('torch/csrc/jit/xla_tensor.cpp')
