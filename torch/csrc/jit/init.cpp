@@ -26,6 +26,7 @@
 #include "torch/csrc/jit/script/python_tree_views.h"
 #include "torch/csrc/jit/python_interpreter.h"
 #ifdef WITH_XLA
+#include "torch/csrc/jit/passes/xla_remove_unused.h"
 #include "torch/csrc/jit/script/module.h"
 #include "torch/csrc/jit/xla_module.h"
 #include "torch/csrc/jit/xla_tensor.h"
@@ -108,6 +109,7 @@ void initJITBindings(PyObject *module) {
    .def("_jit_pass_unwrap_buffered_functions", UnwrapBufferedFunctions)
    .def("_jit_pass_constant_fold", ConstantFold)
    .def("_jit_pass_specialize_undef", specializeUndef)
+    .def("_jit_pass_xla_remove_unused", XlaRemoveUnused)
    .def("_jit_differentiate", [](Graph &g, const std::vector<bool>& requires_grad) {
        // the python binding slightly differs in semantics
        // it makes a copy of the input Graph, and works on that
