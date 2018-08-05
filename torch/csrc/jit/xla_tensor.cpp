@@ -96,16 +96,28 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla(
 }
 
 at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
-  const auto result_slice = literal.data<float>();
-  std::vector<int64_t> dimensions;
   const auto& result_shape = literal.shape();
+  std::vector<int64_t> dimensions;
   for (const auto result_dimension : result_shape.dimensions()) {
     dimensions.push_back(result_dimension);
   }
-  at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
-  std::copy(
-      result_slice.begin(), result_slice.end(), result_tensor.data<float>());
-  return result_tensor;
+  auto literal_type = result_shape.element_type();
+  switch (literal_type) {
+    case xla::PrimitiveType::F32: {
+      const auto result_slice = literal.data<float>();
+      at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
+      std::copy(result_slice.begin(), result_slice.end(), result_tensor.data<float>());
+      return result_tensor;
+    }
+    case xla::PrimitiveType::S64: {
+      const auto result_slice = literal.data<int64>();
+      at::Tensor result_tensor = at::empty(at::CPU(at::kLong), dimensions);
+      std::copy(result_slice.begin(), result_slice.end(), result_tensor.data<int64_t>());
+      return result_tensor;
+    }
+    default:
+      std::runtime_error("Unsupported literal type");
+  }
 }
 
 } // namespace
