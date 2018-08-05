@@ -12,7 +12,8 @@ namespace jit {
 
   XlaModule::XlaModule(script::Module& module,
 		       std::vector<autograd::Variable>& inputs,
-		       bool backward) : backward_graph_initialized(false) {
+		       bool backward) : backward_graph_initialized(false),
+					forward_graph_initialized(false) {
 
   const auto forward = module.find_method("forward");
   assert(forward);
@@ -65,24 +66,8 @@ namespace jit {
   f_real_outputs = gradient.f_real_outputs;
   df_input_captured_inputs = gradient.df_input_captured_inputs;
   df_input_captured_outputs = gradient.df_input_captured_outputs;
-  
 
-  // Now convert the forward and backward graphs to XlaOp
-  std::vector<xla::Shape> forward_shapes;
-  for (auto p : inputs) {
-    forward_shapes.push_back(XLATensor(autograd::as_variable_ref(p)).shape);
-  }
-  for (auto p : params_) {
-    forward_shapes.push_back(p.get()->shape);
-  }
-  
-  XlaCodeImpl xla_fwd_impl(gradient.f);
-  auto maybe_computation = xla_fwd_impl.buildXlaComputation(forward_shapes);
-  if (!maybe_computation) {
-    std::runtime_error("Failed to build XlaComputation");
-  }
-  forward_graph_ = std::move(*maybe_computation);
-
+  f_ = gradient.f;
   df_ = gradient.df;
 }
 
@@ -104,7 +89,22 @@ namespace jit {
   for (auto p : params_) {
     inputs_params_buffers.push_back(p);
   }
-  
+
+  // Lazy-convert forward graph to XlaComputation
+  if (!forward_graph_initialized) {
+    std::vector<xla::Shape> forward_shapes;
+    for (auto p : inputs_params_buffers) {
+      forward_shapes.push_back(p.get()->shape);
+    }
+
+    XlaCodeImpl xla_fwd_impl(f_);
+    auto maybe_computation = xla_fwd_impl.buildXlaComputation(forward_shapes);
+    if (!maybe_computation) {
+      std::runtime_error("Failed to build XlaComputation");
+    }
+    forward_graph_ = std::move(*maybe_computation);
+  }
+
   std::vector<xla::GlobalData*> inputs_params_buffers_data;
   for (auto p : inputs_params_buffers) {
     inputs_params_buffers_data.push_back(p.get()->data_.get());
