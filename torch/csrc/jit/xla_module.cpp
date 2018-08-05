@@ -5,6 +5,7 @@
 #include "torch/csrc/jit/passes/specialize_undef.h"
 #include "torch/csrc/jit/passes/unwrap_buffered_functions.h"
 #include "torch/csrc/jit/passes/constant_folding.h"
+#include "torch/csrc/jit/passes/xla_remove_unused.h"
 
 namespace torch {
 namespace jit {
@@ -56,6 +57,9 @@ namespace jit {
   specializeUndef(*(gradient.df.get()), defined);
   ConstantFold(gradient.df);
   EliminateDeadCode(gradient.df);
+
+  // run pass on forward and backward graphs that drops outputs that XLA doesn't need
+  XlaRemoveUnused(gradient);
 
   // record some graph information
   f_real_outputs = gradient.f_real_outputs;

@@ -23,8 +23,10 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   std::vector<std::shared_ptr<XLATensor>> params_;
   xla::XlaComputation forward_graph_;
   xla::XlaComputation backward_graph_;
+  bool forward_graph_initialized;
   bool backward_graph_initialized;
 
+  std::shared_ptr<Graph> f_;
   std::shared_ptr<Graph> df_;
 
   // info for backwrd captures
