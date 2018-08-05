@@ -112,56 +112,6 @@ xla::XlaComputationClient* XlaGetClient() {
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
 }
 
-namespace {
-
-at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
-  const auto result_slice = literal.data<float>();
-  std::vector<int64_t> dimensions;
-  const auto& result_shape = literal.shape();
-  for (const auto result_dimension : result_shape.dimensions()) {
-    dimensions.push_back(result_dimension);
-  }
-  at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
-  std::copy(
-      result_slice.begin(), result_slice.end(), result_tensor.data<float>());
-  return result_tensor;
-}
-
-} // namespace
-
-at::optional<std::vector<at::Tensor>> XlaCodeImpl::run(
-    const std::vector<at::Tensor>& inputs) const {
-  const auto parameter_shapes = captureInputShapes(inputs);
-  if (!parameter_shapes) {
-    return at::nullopt;
-  }
-  auto compilation_result = buildXlaComputation(*parameter_shapes);
-  if (!compilation_result) {
-    return at::nullopt;
-  }
-  const auto& computation = *compilation_result;
-  std::vector<xla::GlobalData*> arguments;
-  for (int parameter_index = 0; parameter_index < parameter_shapes->size();
-       ++parameter_index) {
-    CHECK_LT(parameter_index, inputs.size());
-    const at::Tensor& param_tensor = inputs[parameter_index];
-    auto data = tensor_to_xla(
-        param_tensor, (*parameter_shapes)[parameter_index], &client_);
-    arguments.push_back(data.release());
-  }
-  auto result_literal =
-      client_.ExecuteComputationAndTransfer(computation, arguments);
-  if (xla::ShapeUtil::IsTuple(result_literal->shape())) {
-    const auto tuple_elements = result_literal->DecomposeTuple();
-    std::vector<at::Tensor> result_tensors;
-    for (const auto& tuple_element : tuple_elements) {
-      result_tensors.push_back(make_tensor_from_xla_literal(tuple_element));
-    }
-    return result_tensors;
-  }
-  return std::vector<at::Tensor>{make_tensor_from_xla_literal(*result_literal)};
-}
-
 at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
     const std::vector<at::Tensor>& inputs) const {
   std::vector<xla::Shape> parameter_shapes;
@@ -1172,28 +1122,6 @@ size_t output_id(const Node* node) {
   return node_outputs[0]->unique();
 }
 
-bool graph_is_supported(const Graph* graph) {
-  const auto nodes = graph->block()->nodes();
-  // Index output of max_pool2d must not be used, not implemented yet.
-  std::unordered_set<size_t> must_be_unused;
-  for (const auto node : nodes) {
-    if (node->kind() == aten::max_pool2d) {
-      const auto node_outputs = node->outputs();
-      must_be_unused.emplace(node_outputs[1]->unique());
-    }
-  }
-  for (const auto node : nodes) {
-    for (const auto input : node->inputs()) {
-      const auto it = must_be_unused.find(input->unique());
-      if (it != must_be_unused.end()) {
-        LOG(INFO) << "Graph not supported; index output of max_pool2d is used.";
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 // Create an identity operation of `ret` to make it the root of the computation.
 void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
   b->GetTupleElement(b->Tuple({ret}), 0);
@@ -1206,10 +1134,6 @@ void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
 
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
-  if (!graph_is_supported(graph_.get())) {
-    return at::nullopt;
-  }
-
   xla::XlaBuilder b("xla_computation");
   std::unordered_map<size_t, xla::XlaOp> node_xla_ops;
   std::unordered_set<size_t> undefined_inputs;
