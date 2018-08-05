@@ -244,8 +244,12 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                node->matches("aten::split(Tensor self, int split_size, int dim) -> Tensor[]")) {
       return {SymbolicVariable::cat(grads, node->namedInput(attr::dim)), nullptr, nullptr};
 
-    } else if (node->matches("aten::view(Tensor self, int[] size) -> Tensor") ||
-               node->matches("aten::reshape(Tensor self, int[] shape) -> Tensor")) {
+    } else if (node->matches("aten::view(Tensor self, int[] size) -> Tensor")) {
+      // TODO: if sizes are not available statically, add an operator that reutrns them as a tuple
+      auto sizes = node->namedInput(attr::self)->type()->expect<TensorType>()->sizes();
+      return {grads.at(0).view_as(inputs.at(0)), nullptr};
+
+    } else if (node->matches("aten::reshape(Tensor self, int[] shape) -> Tensor")) {
       // TODO: if sizes are not available statically, add an operator that reutrns them as a tuple
       auto sizes = node->namedInput(attr::self)->type()->expect<TensorType>()->sizes();
       return {grads.at(0).reshape(sizes), nullptr};

@@ -168,6 +168,9 @@ struct SymbolicVariable {
   SymbolicVariable reshape(std::vector<std::int64_t> sizes) const {
     return reshape(insertConstant(sizes));
   }
+  SymbolicVariable view_as(SymbolicVariable input) const {
+    return view(input.sizes()).typeLike(input);
+  }
   SymbolicVariable addmm(SymbolicVariable mat1, SymbolicVariable mat2) const {
     return create(aten::addmm, {*this, mat1, mat2, insertConstant(1.0), insertConstant(1.0)})[0];
   }
