@@ -86,6 +86,12 @@ void XlaRemoveUnused(Gradient& gradient) {
 	eraseOutput(*it, 1, gradient);
 	break;
       }
+      case aten::max_pool2d: {
+	at::ArrayRef<Value*> outputs = it->outputs();
+	JIT_ASSERT(outputs.size() == 2);
+	eraseOutput(*it, 1, gradient);
+	break;
+      }
     }
   }
 }
