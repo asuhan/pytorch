@@ -204,7 +204,7 @@ xla::XlaOp build_thnn_conv2d_backward_input(
     const xla::XlaOp& weight,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
-  CHECK_EQ(node_inputs.size(), 5);
+  CHECK_EQ(node_inputs.size(), 3);
   const auto& padding_attr = node->is(attr::padding);
   CHECK_EQ(padding_attr.size(), 2);
   // Adjust input size to account for specified padding.
@@ -328,7 +328,7 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
   constexpr int n_dim = 0;
   constexpr int c_dim = 1;
   const auto node_inputs = node->inputs();
-  CHECK_EQ(node_inputs.size(), 5);
+  CHECK_EQ(node_inputs.size(), 3);
   const auto& padding_attr = node->is(attr::padding);
   CHECK_EQ(padding_attr.size(), 2);
   // Adjust input size to account for specified padding.
@@ -1209,7 +1209,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::thnn_conv2d_backward: {
-        CHECK_EQ(node->inputs().size(), 5);
+        CHECK_EQ(node->inputs().size(), 3);
         const auto conv2d_grads = build_thnn_conv2d_backward(
             node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         const auto node_outputs = node->outputs();
@@ -1260,19 +1260,18 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::max_pool2d: {
         CHECK_EQ(node->inputs().size(), 1);
+        CHECK_EQ(node->outputs().size(), 1);
         xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
-        const auto current_unique =
-            node->outputs()[0]->unique(); // ignore indices
+        const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
       }
       case aten::max_pool2d_backward: {
-        CHECK_EQ(node->inputs().size(), 3);
+        CHECK_EQ(node->inputs().size(), 2);
         xla::XlaOp xla_output =
             build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
-        const auto current_unique =
-            node->outputs()[0]->unique(); // ignore indices
+        const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
