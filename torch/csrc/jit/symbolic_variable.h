@@ -206,6 +206,9 @@ struct SymbolicVariable {
     n->is_(a("size"), std::move(sizes));
     return r;
   }
+  SymbolicVariable view_as(SymbolicVariable input) const {
+    return view(input.sizes()).typeLike(input);
+  }
   SymbolicVariable addmm(SymbolicVariable mat1, SymbolicVariable mat2) const {
     Node *n;
     auto r = create(aten::addmm, {*this, mat1, mat2}, 1, &n)[0];

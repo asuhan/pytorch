@@ -120,7 +120,7 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       case aten::neg:
         return {-grads.at(0)};
       case aten::view:
-        return {grads.at(0).view(inputs.at(0).sizes())};
+        return {grads.at(0).view_as(inputs.at(0))};
       case aten::type_as:
         return {grads.at(0).type_as(inputs.at(0))};
       case aten::unsqueeze:
