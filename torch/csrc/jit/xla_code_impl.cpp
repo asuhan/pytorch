@@ -38,67 +38,6 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
   }
 }
 
-template <class NativeT>
-void linearize_tensor(
-    const at::Tensor& t,
-    const size_t total_elements,
-    void* literal_buffer);
-
-template <>
-void linearize_tensor<float>(
-    const at::Tensor& t,
-    const size_t total_elements,
-    void* literal_buffer) {
-  JIT_ASSERT(
-      t.is_contiguous()); // the logic below works only for contiguous Tensors
-  std::copy(
-      t.data<float>(),
-      t.data<float>() + total_elements,
-      static_cast<float*>(literal_buffer));
-}
-
-template <>
-void linearize_tensor<int64>(
-    const at::Tensor& t,
-    const size_t total_elements,
-    void* literal_buffer) {
-  JIT_ASSERT(
-      t.is_contiguous()); // the logic below works only for contiguous Tensors
-  std::copy(
-      t.data<int64_t>(),
-      t.data<int64_t>() + total_elements,
-      static_cast<int64_t*>(literal_buffer));
-}
-
-template <class NativeT>
-std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
-    const at::Tensor& param_tensor,
-    const xla::Shape& param_shape,
-    const xla::XlaComputationClient* client) {
-  size_t total_elements = 1;
-  for (const auto dimension_size : param_tensor.sizes()) {
-    total_elements *= dimension_size;
-  }
-  xla::Literal literal(param_shape);
-  linearize_tensor<NativeT>(
-      param_tensor, total_elements, literal.data<NativeT>().data());
-  return client->TransferParameterToServer(literal);
-}
-
-std::unique_ptr<xla::GlobalData> tensor_to_xla(
-    const at::Tensor& param_tensor,
-    const xla::Shape& param_shape,
-    const xla::XlaComputationClient* client) {
-  switch (param_tensor.type().scalarType()) {
-    case at::ScalarType::Float:
-      return tensor_to_xla_impl<float>(param_tensor, param_shape, client);
-    case at::ScalarType::Long:
-      return tensor_to_xla_impl<int64>(param_tensor, param_shape, client);
-    default:
-      LOG(FATAL) << "Tensor type not supported";
-  }
-}
-
 } // namespace
 
 namespace torch {
