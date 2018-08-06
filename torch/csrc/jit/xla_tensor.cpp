@@ -106,13 +106,19 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
     case xla::PrimitiveType::F32: {
       const auto result_slice = literal.data<float>();
       at::Tensor result_tensor = at::empty(at::CPU(at::kFloat), dimensions);
-      std::copy(result_slice.begin(), result_slice.end(), result_tensor.data<float>());
+      std::copy(
+          result_slice.begin(),
+          result_slice.end(),
+          result_tensor.data<float>());
       return result_tensor;
     }
     case xla::PrimitiveType::S64: {
       const auto result_slice = literal.data<int64>();
       at::Tensor result_tensor = at::empty(at::CPU(at::kLong), dimensions);
-      std::copy(result_slice.begin(), result_slice.end(), result_tensor.data<int64_t>());
+      std::copy(
+          result_slice.begin(),
+          result_slice.end(),
+          result_tensor.data<int64_t>());
       return result_tensor;
     }
     default:
@@ -124,7 +130,7 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
 
 using namespace torch::jit;
 
-XLATensor::XLATensor(const autograd::Variable &tensor) : grad(nullptr) {
+XLATensor::XLATensor(const autograd::Variable& tensor) : grad(nullptr) {
   auto client_ = XlaGetClient();
   dtype = *make_xla_primitive_type(tensor.type().scalarType());
   shape = make_xla_shape(tensor.sizes(), dtype);
@@ -132,7 +138,7 @@ XLATensor::XLATensor(const autograd::Variable &tensor) : grad(nullptr) {
   requires_grad = tensor.requires_grad();
 }
 
-XLATensor::XLATensor(const xla::Literal &literal) : grad(nullptr) {
+XLATensor::XLATensor(const xla::Literal& literal) : grad(nullptr) {
   auto client_ = XlaGetClient();
   data_ = client_->TransferParameterToServer(literal);
   shape = literal.shape();
@@ -148,8 +154,8 @@ at::Tensor XLATensor::toTensor() {
   xla::XlaComputation identity = b.Build().ValueOrDie();
 
   auto client_ = XlaGetClient();
-  auto result_literal = client_->ExecuteComputationAndTransfer(
-	       identity, {data_.get()});
+  auto result_literal =
+      client_->ExecuteComputationAndTransfer(identity, {data_.get()});
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
   return autograd::make_variable(return_tensor, requires_grad);
 }

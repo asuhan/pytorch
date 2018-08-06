@@ -12,15 +12,17 @@ namespace jit {
 struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   TH_DISALLOW_COPY_AND_ASSIGN(XlaModule);
 
-  XlaModule(script::Module& module,
-	    std::vector<autograd::Variable>& inputs,
-	    bool backward=true);
+  XlaModule(
+      script::Module& module,
+      std::vector<autograd::Variable>& inputs,
+      bool backward = true);
 
-  std::vector<std::shared_ptr<XLATensor> > forward(const std::vector<std::shared_ptr<XLATensor> >& inputs);
-  void backward(const std::vector<std::shared_ptr<XLATensor> >& grad_outputs);
+  std::vector<std::shared_ptr<XLATensor>> forward(
+      const std::vector<std::shared_ptr<XLATensor>>& inputs);
+  void backward(const std::vector<std::shared_ptr<XLATensor>>& grad_outputs);
 
-  std::vector<std::shared_ptr<XLATensor> > parameters();
-  std::vector<std::shared_ptr<XLATensor> > parameters_buffers();
+  std::vector<std::shared_ptr<XLATensor>> parameters();
+  std::vector<std::shared_ptr<XLATensor>> parameters_buffers();
 
  private:
   std::vector<bool> is_buffer_;
@@ -39,7 +41,8 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   std::vector<uint64_t> df_input_captured_inputs;
   std::vector<uint64_t> df_input_captured_outputs;
 
-  // TODO: captured_outputs only needs shape, no need for holding onto full Tensor
+  // TODO: captured_outputs only needs shape, no need for holding onto full
+  // Tensor
   std::vector<std::shared_ptr<XLATensor>> inputs_;
   std::vector<std::shared_ptr<XLATensor>> captured_outputs_;
   std::vector<std::shared_ptr<XLATensor>> captured_inputs_outputs_;
