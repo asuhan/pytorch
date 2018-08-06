@@ -608,9 +608,9 @@ void initJitScriptBindings(PyObject* module) {
 #ifdef WITH_XLA
   py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule")
     .def(
-	 py::init([](script::Module& module, std::vector<autograd::Variable>& inputs) {
-	     return std::make_shared<XlaModule>(module, inputs);
-	   }), py::arg("module"), py::arg("inputs"))
+	 py::init([](script::Module& module, std::vector<autograd::Variable>& inputs, bool backward) {
+	     return std::make_shared<XlaModule>(module, inputs, backward);
+	   }), py::arg("module"), py::arg("inputs"), py::arg("backward") = true)
     .def("__call__", [](XlaModule& xla_module, py::args args) -> py::object {
 	auto inputs = createTensorList(args);
 	auto outputs = xla_module.forward(inputs);
