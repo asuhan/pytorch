@@ -173,6 +173,18 @@ void initJITBindings(PyObject *module) {
     .def("to_tensor", [](XLATensor &s) {
 	    return s.toTensor();
     })
+    .def("add_", [](std::shared_ptr<XLATensor> self, const double alpha, const XLATensor &other) {
+      self->add_(other, alpha);
+      return self;
+    })
+    .def("add_", [](std::shared_ptr<XLATensor> self, const XLATensor &other) {
+      self->add_(other, 1.);
+      return self;
+    })
+    .def("mul_", [](std::shared_ptr<XLATensor> self, const XLATensor &other) {
+      self->mul_(other);
+      return self;
+    }, py::arg("other"))
     .def_property_readonly("grad", [](XLATensor& m) -> py::object {
       if (m.grad() == nullptr) {
         return py::none();

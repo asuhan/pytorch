@@ -23,6 +23,9 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
   xla::Shape shape() const;
   xla::GlobalData* data() const;
 
+  void add_(const XLATensor& other, const at::Scalar& alpha);
+  void mul_(const XLATensor& other);
+
  private:
   std::unique_ptr<xla::GlobalData> data_;
   xla::Shape shape_;
