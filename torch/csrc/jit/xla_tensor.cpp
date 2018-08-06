@@ -130,32 +130,48 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
 
 using namespace torch::jit;
 
-XLATensor::XLATensor(const autograd::Variable& tensor) : grad(nullptr) {
+XLATensor::XLATensor(const autograd::Variable& tensor) : grad_(nullptr) {
   auto client_ = XlaGetClient();
-  dtype = *make_xla_primitive_type(tensor.type().scalarType());
-  shape = make_xla_shape(tensor.sizes(), dtype);
-  data_ = tensor_to_xla(tensor, shape, client_);
-  requires_grad = tensor.requires_grad();
+  dtype_ = *make_xla_primitive_type(tensor.type().scalarType());
+  shape_ = make_xla_shape(tensor.sizes(), dtype_);
+  data_ = tensor_to_xla(tensor, shape_, client_);
+  requires_grad_ = tensor.requires_grad();
 }
 
-XLATensor::XLATensor(const xla::Literal& literal) : grad(nullptr) {
+XLATensor::XLATensor(const xla::Literal& literal) : grad_(nullptr) {
   auto client_ = XlaGetClient();
   data_ = client_->TransferParameterToServer(literal);
-  shape = literal.shape();
-  dtype = shape.element_type();
-  requires_grad = false;
+  shape_ = literal.shape();
+  dtype_ = shape_.element_type();
+  requires_grad_ = false;
+}
+
+std::shared_ptr<XLATensor> XLATensor::grad() const {
+  return grad_;
+}
+
+void XLATensor::setGrad(std::shared_ptr<XLATensor> grad) {
+  grad_ = grad;
+}
+
+xla::Shape XLATensor::shape() const {
+  return shape_;
+}
+
+xla::GlobalData* XLATensor::data() const {
+  return data_.get();
 }
 
 at::Tensor XLATensor::toTensor() {
   // because there's no transferToClient, we'll define an `identity` graph, and
   // execute it
   xla::XlaBuilder b("identity");
-  b.GetTupleElement(b.Tuple({b.Parameter(0, shape, "x")}), 0);
+  b.GetTupleElement(b.Tuple({b.Parameter(0, shape_, "x")}), 0);
   xla::XlaComputation identity = b.Build().ValueOrDie();
 
   auto client_ = XlaGetClient();
   auto result_literal =
       client_->ExecuteComputationAndTransfer(identity, {data_.get()});
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
-  return autograd::make_variable(return_tensor, requires_grad);
+  return autograd::make_variable(return_tensor, requires_grad_);
 }

@@ -130,7 +130,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
   if (!forward_graph_initialized) {
     std::vector<xla::Shape> forward_shapes;
     for (auto p : inputs_params_buffers) {
-      forward_shapes.push_back(p.get()->shape);
+      forward_shapes.push_back(p.get()->shape());
     }
 
     XlaCodeImpl xla_fwd_impl(f_);
@@ -143,7 +143,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
 
   std::vector<xla::GlobalData*> inputs_params_buffers_data;
   for (auto p : inputs_params_buffers) {
-    inputs_params_buffers_data.push_back(p.get()->data_.get());
+    inputs_params_buffers_data.push_back(p.get()->data());
   }
   // TODO: move to ExecuteComputation (avoid transfer)
   // for that, one needs to know how to construct XLATensor from
@@ -195,7 +195,7 @@ void XlaModule::backward(
 
   for (auto p : captured_outputs_) {
     // dummy all zeros grad outputs for captured_outputs
-    auto shape = p->shape;
+    auto shape = p->shape();
     std::vector<int64_t> dims;
     for (const auto d : shape.dimensions()) {
       dims.push_back(d);
@@ -212,7 +212,7 @@ void XlaModule::backward(
   if (!backward_graph_initialized) {
     std::vector<xla::Shape> backward_shapes;
     for (auto p : raw_grad_outputs) {
-      backward_shapes.push_back(p.get()->shape);
+      backward_shapes.push_back(p.get()->shape());
     }
 
     XlaCodeImpl xla_bwd_impl(df_);
@@ -225,7 +225,7 @@ void XlaModule::backward(
 
   std::vector<xla::GlobalData*> raw_grad_outputs_data;
   for (auto p : raw_grad_outputs) {
-    xla::GlobalData* ptr = p.get()->data_.get();
+    xla::GlobalData* ptr = p.get()->data();
     raw_grad_outputs_data.push_back(ptr);
   }
 
@@ -249,12 +249,12 @@ void XlaModule::backward(
 
   // now set .grad attributes of the input and param tensors
   for (int i = 0; i < inputs_.size(); i++) {
-    inputs_[i]->grad = grad_inputs[i];
+    inputs_[i]->setGrad(grad_inputs[i]);
   }
 
   for (int i = 0; i < params_.size(); i++) {
     auto t = grad_inputs[i + inputs_.size()];
-    params_[i]->grad = t;
+    params_[i]->setGrad(t);
   }
 
   // release handles to saved / captured inputs and outputs

@@ -9,19 +9,27 @@
 namespace torch {
 namespace jit {
 
-struct XLATensor : public std::enable_shared_from_this<XLATensor> {
+class XLATensor : public std::enable_shared_from_this<XLATensor> {
+ public:
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensor);
   XLATensor(const autograd::Variable&);
   XLATensor(const xla::Literal&);
 
-  std::unique_ptr<xla::GlobalData> data_;
-  xla::Shape shape;
-  xla::PrimitiveType dtype; // naming dtype for consistency with at::Tensor
-  bool requires_grad;
-  /* std::shared_ptr<xla::XlaComputation> grad_fn; */
-  std::shared_ptr<XLATensor> grad;
-
   at::Tensor toTensor();
+
+  std::shared_ptr<XLATensor> grad() const;
+  void setGrad(std::shared_ptr<XLATensor> grad);
+
+  xla::Shape shape() const;
+  xla::GlobalData* data() const;
+
+ private:
+  std::unique_ptr<xla::GlobalData> data_;
+  xla::Shape shape_;
+  xla::PrimitiveType dtype_; // naming dtype for consistency with at::Tensor
+  bool requires_grad_;
+  /* std::shared_ptr<xla::XlaComputation> grad_fn; */
+  std::shared_ptr<XLATensor> grad_;
 };
 
 } // namespace jit
