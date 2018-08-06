@@ -167,24 +167,23 @@ void initJITBindings(PyObject *module) {
 #ifdef WITH_XLA
   py::class_<XLATensor, std::shared_ptr<XLATensor>>(m, "XLATensor")
     .def(
-	 py::init([](autograd::Variable tensor) {
+	    py::init([](autograd::Variable tensor) {
 	     return std::make_shared<XLATensor>(tensor);
 	   }), py::arg("tensor"))
     .def("to_tensor", [](XLATensor &s) {
-	return s.toTensor();
-      })
+	    return s.toTensor();
+    })
     .def_property_readonly("grad", [](XLATensor& m) -> py::object {
-	if (m.grad == nullptr) {
-	  return py::none();
-	} else {
-	  return py::cast<std::shared_ptr<XLATensor> >(m.grad);
-	}
-      }).def("__repr__", [](XLATensor& m) {
-        std::ostringstream s;
-        s << m.toTensor();
-        return s.str();
-      });
-;
+      if (m.grad() == nullptr) {
+        return py::none();
+      } else {
+        return py::cast<std::shared_ptr<XLATensor>>(m.grad());
+      }
+    }).def("__repr__", [](XLATensor& m) {
+      std::ostringstream s;
+      s << m.toTensor();
+      return s.str();
+    });
 #endif // WITH_XLA
 
   py::class_<GraphExecutorState>(m, "GraphExecutorState")
