@@ -175,3 +175,38 @@ at::Tensor XLATensor::toTensor() {
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
   return autograd::make_variable(return_tensor, requires_grad_);
 }
+
+namespace {
+
+// TODO(asuhan): de-dup with the version in xla_code_impl
+std::vector<int64> xla_shape_sizes(const xla::Shape& shape) {
+  std::vector<int64> shape_sizes(
+      shape.dimensions().begin(), shape.dimensions().end());
+  return shape_sizes;
+}
+
+} // namespace
+
+void XLATensor::add_(const XLATensor& other, const at::Scalar& alpha) {
+  xla::XlaBuilder b("XLATensor::add_");
+  const auto alpha_literal = xla::Literal::CreateR0<float>(alpha.toDouble());
+  const auto alpha_xla = b.ConstantLiteral(*alpha_literal);
+  b.Add(
+      b.Parameter(0, shape_, "self"),
+      b.Mul(
+          b.Parameter(1, shape_, "other"),
+          b.Broadcast(alpha_xla, xla_shape_sizes(shape_))));
+  auto add_computation = b.Build().ValueOrDie();
+  auto client = XlaGetClient();
+  data_ = client->ExecuteComputation(
+      add_computation, {data_.get(), other.data_.get()});
+}
+
+void XLATensor::mul_(const XLATensor& other) {
+  xla::XlaBuilder b("XLATensor::mul_");
+  b.Mul(b.Parameter(0, shape_, "self"), b.Parameter(1, shape_, "self"));
+  auto mul_computation = b.Build().ValueOrDie();
+  auto client = XlaGetClient();
+  data_ = client->ExecuteComputation(
+      mul_computation, {data_.get(), other.data_.get()});
+}
