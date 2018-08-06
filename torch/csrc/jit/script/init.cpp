@@ -619,6 +619,12 @@ void initJitScriptBindings(PyObject* module) {
     .def("backward", [](XlaModule& xla_module, py::args args) {
 	auto inputs = createTensorList(args);
 	xla_module.backward(inputs);
+      })
+    .def("parameters", [](XlaModule& xla_module) {
+	return xla_module.parameters();
+      })
+    .def("parameters_buffers", [](XlaModule& xla_module) {
+	return xla_module.parameters_buffers();
       });
 #endif  // WITH_XLA
 

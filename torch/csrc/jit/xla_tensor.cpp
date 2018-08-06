@@ -117,7 +117,7 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
       return result_tensor;
     }
     default:
-      std::runtime_error("Unsupported literal type");
+      AT_ERROR("Unsupported literal type");
   }
 }
 

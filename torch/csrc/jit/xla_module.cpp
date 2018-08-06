@@ -7,6 +7,20 @@
 #include "torch/csrc/jit/passes/constant_folding.h"
 #include "torch/csrc/jit/passes/xla_remove_unused.h"
 
+namespace {
+  using namespace torch::jit;
+  static void gatherParameters(std::vector<at::Tensor*> & values, std::vector<bool> & is_buffer, const script::Module & m) {
+  for(auto & param : m.get_parameters()) {
+    values.push_back(param->slot());
+    is_buffer.push_back(param->is_buffer);
+  }
+  for(const auto & sub : m.get_modules()) {
+    gatherParameters(values, is_buffer, *sub->module);
+  }
+}
+
+} // namespace
+
 namespace torch {
 namespace jit {
 
@@ -14,9 +28,8 @@ namespace jit {
 		       std::vector<autograd::Variable>& inputs,
 		       bool backward) : backward_graph_initialized(false),
 					forward_graph_initialized(false) {
-
   const auto forward = module.find_method("forward");
-  assert(forward);
+  JIT_ASSERT(forward);
 
   // get forward graph
   auto fgraph = forward->graph();
@@ -27,9 +40,17 @@ namespace jit {
   ConstantFold(fgraph);
   EliminateDeadCode(fgraph);
   
+  std::vector<at::Tensor*> params_buffers_regather;
+  gatherParameters(params_buffers_regather, is_buffer_, module);
+
   // convert model parameters to vector of XLATensors
-  for (auto p : forward->params()) {
-    params_.push_back(std::make_shared<XLATensor>(autograd::as_variable_ref(*p)));
+  auto forward_params = forward->params();
+  JIT_ASSERT(params_buffers_regather.size() == forward_params.size());
+
+  for (uint32_t i = 0; i < forward_params.size(); i++) {
+    JIT_ASSERT(forward_params[i] == params_buffers_regather[i]);
+    auto p = forward_params[i];
+    params_buffers_.push_back(std::make_shared<XLATensor>(autograd::as_variable_ref(*p)));
   }
 
   // if backward is true, differentiate graph
@@ -37,11 +58,18 @@ namespace jit {
   for (auto p : inputs) {
     inputs_require_grad.push_back(p.requires_grad());
   }
-  for (auto p : params_) {
-    inputs_require_grad.push_back(p.get()->requires_grad);
+
+  for (uint32_t i = 0; i < params_buffers_.size(); i++) {
+    if (!is_buffer_[i]) {
+      params_.push_back(params_buffers_[i]);
+    }
   }
 
-  // convert forward and backward graphs to XLAOp
+  for (auto buf : is_buffer_) {
+    inputs_require_grad.push_back(!buf);
+  }
+
+  // symbolically differentiate graph to get backward graph
   auto fgraph_copy = fgraph->copy();
   Gradient gradient = differentiate(fgraph_copy, inputs_require_grad);
 
@@ -86,7 +114,7 @@ namespace jit {
   for (auto p : inputs) {
     inputs_params_buffers.push_back(p);
   }
-  for (auto p : params_) {
+  for (auto p : params_buffers_) {
     inputs_params_buffers.push_back(p);
   }
 
@@ -100,7 +128,7 @@ namespace jit {
     XlaCodeImpl xla_fwd_impl(f_);
     auto maybe_computation = xla_fwd_impl.buildXlaComputation(forward_shapes);
     if (!maybe_computation) {
-      std::runtime_error("Failed to build XlaComputation");
+      AT_ERROR("Failed to build XlaComputation");
     }
     forward_graph_ = std::move(*maybe_computation);
   }
@@ -177,7 +205,7 @@ void XlaModule::backward(const std::vector<std::shared_ptr<XLATensor> >& grad_ou
       XlaCodeImpl xla_bwd_impl(df_);
       auto maybe_computation = xla_bwd_impl.buildXlaComputation(backward_shapes);
       if (!maybe_computation) {
-    	std::runtime_error("Failed to build backward XlaComputation");
+	AT_ERROR("Failed to build backward XlaComputation");
       }
       backward_graph_ = std::move(*maybe_computation);
     }
@@ -205,20 +233,32 @@ void XlaModule::backward(const std::vector<std::shared_ptr<XLATensor> >& grad_ou
       grad_inputs.push_back(std::make_shared<XLATensor>(*result_literal));
     }
 
+    JIT_ASSERT((inputs_.size() + params_.size()) == grad_inputs.size());
+
     // now set .grad attributes of the input and param tensors
     for (int i = 0; i < inputs_.size(); i++) {
       inputs_[i]->grad = grad_inputs[i];
     }
 
     for (int i = 0; i < params_.size(); i++) {
-      params_[i]->grad = grad_inputs[i + inputs_.size()];
+      auto t = grad_inputs[i + inputs_.size()];
+      params_[i]->grad = t;
     }
 
     // release handles to saved / captured inputs and outputs
     inputs_.clear();
     captured_outputs_.clear();
     captured_inputs_outputs_.clear();
-  }
+}
+
+std::vector<std::shared_ptr<XLATensor> > XlaModule::parameters() {
+  return params_;
+}
+
+std::vector<std::shared_ptr<XLATensor> > XlaModule::parameters_buffers() {
+  return params_buffers_;
+}
+
 
 } // namespace jit
 } // namespace torch
