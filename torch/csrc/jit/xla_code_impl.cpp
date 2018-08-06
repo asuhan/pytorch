@@ -1259,9 +1259,11 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::max_pool2d: {
         CHECK_EQ(node->inputs().size(), 1);
-        CHECK_EQ(node->outputs().size(), 1);
+        CHECK_GE(node->outputs().size(), 1);
         xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
-        const auto current_unique = output_id(node);
+        const auto node_outputs = node->outputs();
+        CHECK_GE(node_outputs.size(), 1);
+        const auto current_unique = node_outputs[0]->unique();
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;

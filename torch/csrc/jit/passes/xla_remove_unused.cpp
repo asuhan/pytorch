@@ -11,12 +11,14 @@ static void eraseOutput(Node* node, int output_nr, Gradient& gradient) {
 
   // find index of this output in fgraph outputs
   int32_t output_idx = -1;
-  for (uint32_t i = 0; i < gradient.f->outputs().size(); i++) {
+  for (uint32_t i = 0; i < num_outputs; i++) {
     if (gradient.f->outputs()[i] == output) {
       output_idx = i;
     }
   }
-  JIT_ASSERT(output_idx != -1);
+  if (output_idx == -1) {
+    return;
+  }
 
   // remove from fgraph outputs
   gradient.f->eraseOutput(output_idx);
