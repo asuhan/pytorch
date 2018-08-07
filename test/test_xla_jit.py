@@ -491,7 +491,7 @@ class TestOptimizer(TestCase):
         self.assertEqual(x.add_(2, y).mul_(y), xla_x.add_(2, xla_y).mul_(xla_y).to_tensor())
         self.assertEqual(x.add_(y).mul_(y), xla_x.add_(xla_y).mul_(xla_y).to_tensor())
 
-    def test_sgd(self):
+    def checkSgd(self, nsteps, do_zero_grad):
         input = torch.randn(4, 4, requires_grad=True)
         input_xla = torch._C.XLATensor(input)
         model = nn.Linear(4, 20)
@@ -506,11 +506,19 @@ class TestOptimizer(TestCase):
         grad_output_xla = torch._C.XLATensor(grad_output)
         output.backward(grad_output)
         xla_model.backward(grad_output_xla)
-        xla_optimizer.step()
-        optimizer.step()
-        xla_updated_params = [p.to_tensor().data for p in xla_model.parameters()]
-        updated_params = [p.data for p in model.parameters()]
-        self.assertEqual(xla_updated_params, updated_params);
+        if do_zero_grad:
+            optimizer.zero_grad()
+            xla_optimizer.zero_grad()
+        for _ in range(0, nsteps):
+            xla_optimizer.step()
+            optimizer.step()
+            xla_updated_params = [p.to_tensor().data for p in xla_model.parameters()]
+            updated_params = [p.data for p in model.parameters()]
+            self.assertEqual(xla_updated_params, updated_params);
+
+    def test_sgd(self):
+        self.checkSgd(nsteps=1, do_zero_grad=True)
+        self.checkSgd(nsteps=2, do_zero_grad=False)
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')

@@ -218,6 +218,17 @@ void XLATensor::mul_(const XLATensor& other) {
   operations_params_.push_back(other.data_.get());
 }
 
+void XLATensor::zero_() {
+  resetOperationsState();
+  const auto zero = b_.ConstantLiteral(xla::Literal::Zero(dtype_));
+  operations_ = b_.Broadcast(zero, xla_shape_sizes(shape_));
+  applyOps();
+}
+
+void XLATensor::detach_() {
+  requires_grad_ = false;
+}
+
 void XLATensor::applyOps() {
   if (!operations_) {
     return;
