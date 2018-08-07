@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 from common import TestCase, run_tests
 
 
@@ -490,6 +491,26 @@ class TestOptimizer(TestCase):
         self.assertEqual(x.add_(2, y).mul_(y), xla_x.add_(2, xla_y).mul_(xla_y).to_tensor())
         self.assertEqual(x.add_(y).mul_(y), xla_x.add_(xla_y).mul_(xla_y).to_tensor())
 
+    def test_sgd(self):
+        input = torch.randn(4, 4, requires_grad=True)
+        input_xla = torch._C.XLATensor(input)
+        model = nn.Linear(4, 20)
+        traced_model = torch.jit.trace(input)(model)
+        xla_model = torch._C.XlaModule(traced_model, [input])
+        learning_rate = 0.1
+        xla_optimizer = optim.SGD(xla_model.parameters(), lr=learning_rate)
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+        xla_model(input_xla)
+        output = model(input)
+        grad_output = torch.randn(*output.shape) # random gradients
+        grad_output_xla = torch._C.XLATensor(grad_output)
+        output.backward(grad_output)
+        xla_model.backward(grad_output_xla)
+        xla_optimizer.step()
+        optimizer.step()
+        xla_updated_params = [p.to_tensor().data for p in xla_model.parameters()]
+        updated_params = [p.data for p in model.parameters()]
+        self.assertEqual(xla_updated_params, updated_params);
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
