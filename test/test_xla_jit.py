@@ -488,6 +488,18 @@ class TestGradients(TestCase):
         self.checkGrad(model, inputs, xla=False)
 
 
+class TestOptimizer(TestCase):
+    def test_add_mul(self):
+        orig_x = torch.Tensor([[1, 2, 3], [4, 5, 6]])
+        orig_y = torch.Tensor([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+        x = orig_x
+        y = orig_y
+        xla_x = torch._C.XLATensor(orig_x)
+        xla_y = torch._C.XLATensor(orig_y)
+        self.assertEqual(x.add_(2, y).mul_(y), xla_x.add_(2, xla_y).mul_(xla_y).to_tensor())
+        self.assertEqual(x.add_(y).mul_(y), xla_x.add_(xla_y).mul_(xla_y).to_tensor())
+
+
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
     run_tests()
