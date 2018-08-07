@@ -214,8 +214,22 @@ void XLATensor::mul_(const XLATensor& other) {
     CHECK(operations_params_.empty());
     operations_params_.push_back(data_.get());
   }
-  b_.Mul(old_tensor, b_.Parameter(operations_params_.size(), shape_, "other"));
+  operations_ = b_.Mul(
+      old_tensor, b_.Parameter(operations_params_.size(), shape_, "other"));
   operations_params_.push_back(other.data_.get());
+}
+
+void XLATensor::mul_(const at::Scalar& other) {
+  const auto old_tensor =
+      operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
+  if (!operations_) {
+    CHECK(operations_params_.empty());
+    operations_params_.push_back(data_.get());
+  }
+  const auto other_literal = xla::Literal::CreateR0<float>(other.toDouble());
+  const auto other_xla = b_.ConstantLiteral(*other_literal);
+  operations_ =
+      b_.Mul(old_tensor, b_.Broadcast(other_xla, xla_shape_sizes(shape_)));
 }
 
 void XLATensor::zero_() {
