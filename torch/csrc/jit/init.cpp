@@ -185,6 +185,12 @@ void initJITBindings(PyObject *module) {
       self->mul_(other);
       return self;
     }, py::arg("other"))
+    .def_property_readonly("data", [](const XLATensor& m) -> py::object {
+      return py::cast<const XLATensor&>(m);
+    })
+    .def_property_readonly("is_leaf", [](const XLATensor&) {
+      return true;
+    })
     .def_property_readonly("grad", [](XLATensor& m) -> py::object {
       if (m.grad() == nullptr) {
         return py::none();
