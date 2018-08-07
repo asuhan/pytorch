@@ -185,6 +185,10 @@ void initJITBindings(PyObject *module) {
       self->mul_(other);
       return self;
     }, py::arg("other"))
+    .def("mul_", [](std::shared_ptr<XLATensor> self, double other) {
+      self->mul_(other);
+      return self;
+    })
     .def("zero_", [](std::shared_ptr<XLATensor> self) {
       self->zero_();
       return self;
