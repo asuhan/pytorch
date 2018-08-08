@@ -132,40 +132,104 @@ at::Tensor make_tensor_from_xla_literal(const xla::Literal& literal) {
 using namespace torch::jit;
 
 XLATensor::XLATensor(const autograd::Variable& tensor)
+    : data_(new XLATensorData(tensor)),
+      requires_grad_(tensor.requires_grad()) {}
+
+XLATensor::XLATensor(const xla::Literal& literal)
+    : data_(new XLATensorData(literal)), requires_grad_(false) {}
+
+at::Tensor XLATensor::toTensor() {
+  const auto t = data_->toTensor();
+  const auto v = static_cast<const autograd::Variable&>(t);
+  return autograd::make_variable(v.data(), requires_grad_);
+}
+
+std::shared_ptr<XLATensor> XLATensor::grad() const {
+  return data_->grad();
+}
+
+std::shared_ptr<XLATensorData> XLATensor::data() const {
+  return data_;
+}
+
+void XLATensor::setGrad(std::shared_ptr<XLATensor> grad) {
+  data_->setGrad(grad);
+}
+
+xla::Shape XLATensor::shape() const {
+  return data_->shape();
+}
+xla::GlobalData* XLATensor::xlaData() const {
+  return data_->xlaData();
+}
+
+// Basic tensor operations used by the optimizers.
+void XLATensor::add_(XLATensor& other, const at::Scalar& alpha) {
+  data_->add_(other, alpha);
+}
+
+void XLATensor::mul_(XLATensor& other) {
+  data_->mul_(other);
+}
+
+void XLATensor::mul_(const at::Scalar& other) {
+  data_->mul_(other);
+}
+
+void XLATensor::zero_() {
+  data_->zero_();
+}
+
+// Applies the queue of operations in preparation for using the data.
+void XLATensor::applyOps() {
+  data_->applyOps();
+}
+
+void XLATensor::detach_() {
+  requires_grad_ = false;
+}
+
+void XLATensor::applyOpsMulti(
+    const std::vector<std::shared_ptr<XLATensor>>& tensors) {
+  // TODO(asuhan): Actually do a batch apply to minimize roundtrips.
+  for (auto tensor : tensors) {
+    tensor->applyOps();
+  }
+}
+
+XLATensorData::XLATensorData(const autograd::Variable& tensor)
     : grad_(nullptr), b_("XLATensor") {
   auto client_ = XlaGetClient();
   dtype_ = *make_xla_primitive_type(tensor.type().scalarType());
   shape_ = make_xla_shape(tensor.sizes(), dtype_);
-  data_ = tensor_to_xla(tensor, shape_, client_);
-  requires_grad_ = tensor.requires_grad();
+  xla_data_ = tensor_to_xla(tensor, shape_, client_);
 }
 
-XLATensor::XLATensor(const xla::Literal& literal)
+XLATensorData::XLATensorData(const xla::Literal& literal)
     : grad_(nullptr), b_("XLATensor") {
   auto client_ = XlaGetClient();
-  data_ = client_->TransferParameterToServer(literal);
+  xla_data_ = client_->TransferParameterToServer(literal);
   shape_ = literal.shape();
   dtype_ = shape_.element_type();
-  requires_grad_ = false;
 }
 
-std::shared_ptr<XLATensor> XLATensor::grad() const {
+std::shared_ptr<XLATensor> XLATensorData::grad() const {
   return grad_;
 }
 
-void XLATensor::setGrad(std::shared_ptr<XLATensor> grad) {
+void XLATensorData::setGrad(std::shared_ptr<XLATensor> grad) {
   grad_ = grad;
 }
 
-xla::Shape XLATensor::shape() const {
+xla::Shape XLATensorData::shape() const {
   return shape_;
 }
 
-xla::GlobalData* XLATensor::data() const {
-  return data_.get();
+xla::GlobalData* XLATensorData::xlaData() const {
+  return xla_data_.get();
 }
 
-at::Tensor XLATensor::toTensor() {
+at::Tensor XLATensorData::toTensor() {
   applyOps();
   // because there's no transferToClient, we'll define an `identity` graph, and
   // execute it
@@ -175,9 +239,9 @@ at::Tensor XLATensor::toTensor() {
 
   auto client_ = XlaGetClient();
   auto result_literal =
-      client_->ExecuteComputationAndTransfer(identity, {data_.get()});
+      client_->ExecuteComputationAndTransfer(identity, {xla_data_.get()});
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
-  return autograd::make_variable(return_tensor, requires_grad_);
+  return autograd::make_variable(return_tensor, false);
 }
 
 namespace {
@@ -191,47 +255,43 @@ std::vector<int64> xla_shape_sizes(const xla::Shape& shape) {
 
 } // namespace
 
-void XLATensor::add_(XLATensor& other, const at::Scalar& alpha) {
-  if (other.operations_) {
-    other.applyOps();
-  }
+void XLATensorData::add_(XLATensor& other, const at::Scalar& alpha) {
+  other.applyOps();
   const auto alpha_literal = xla::Literal::CreateR0<float>(alpha.toDouble());
   const auto alpha_xla = b_.ConstantLiteral(*alpha_literal);
   const auto old_tensor =
       operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
   if (!operations_) {
     CHECK(operations_params_.empty());
-    operations_params_.push_back(data_.get());
+    operations_params_.push_back(xla_data_.get());
   }
   operations_ = b_.Add(
       old_tensor,
       b_.Mul(
           b_.Parameter(operations_params_.size(), shape_, "other"),
           b_.Broadcast(alpha_xla, xla_shape_sizes(shape_))));
-  operations_params_.push_back(other.data_.get());
+  operations_params_.push_back(other.xlaData());
 }
 
-void XLATensor::mul_(XLATensor& other) {
-  if (other.operations_) {
-    other.applyOps();
-  }
+void XLATensorData::mul_(XLATensor& other) {
+  other.applyOps();
   const auto old_tensor =
       operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
   if (!operations_) {
     CHECK(operations_params_.empty());
-    operations_params_.push_back(data_.get());
+    operations_params_.push_back(xla_data_.get());
   }
   operations_ = b_.Mul(
       old_tensor, b_.Parameter(operations_params_.size(), shape_, "other"));
-  operations_params_.push_back(other.data_.get());
+  operations_params_.push_back(other.xlaData());
 }
 
-void XLATensor::mul_(const at::Scalar& other) {
+void XLATensorData::mul_(const at::Scalar& other) {
   const auto old_tensor =
       operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
   if (!operations_) {
     CHECK(operations_params_.empty());
-    operations_params_.push_back(data_.get());
+    operations_params_.push_back(xla_data_.get());
   }
   const auto other_literal = xla::Literal::CreateR0<float>(other.toDouble());
   const auto other_xla = b_.ConstantLiteral(*other_literal);
@@ -239,36 +299,24 @@ void XLATensor::mul_(const at::Scalar& other) {
       b_.Mul(old_tensor, b_.Broadcast(other_xla, xla_shape_sizes(shape_)));
 }
 
-void XLATensor::zero_() {
+void XLATensorData::zero_() {
   resetOperationsState();
   const auto zero = b_.ConstantLiteral(xla::Literal::Zero(dtype_));
   operations_ = b_.Broadcast(zero, xla_shape_sizes(shape_));
   applyOps();
 }
 
-void XLATensor::detach_() {
-  requires_grad_ = false;
-}
-
-void XLATensor::applyOps() {
+void XLATensorData::applyOps() {
   if (!operations_) {
     return;
   }
   auto computation = b_.Build().ValueOrDie();
   auto client = XlaGetClient();
-  data_ = client->ExecuteComputation(computation, operations_params_);
+  xla_data_ = client->ExecuteComputation(computation, operations_params_);
   resetOperationsState();
 }
 
-void XLATensor::applyOpsMulti(
-    const std::vector<std::shared_ptr<XLATensor>>& tensors) {
-  // TODO(asuhan): Actually do a batch apply to minimize roundtrips.
-  for (auto tensor : tensors) {
-    tensor->applyOps();
-  }
-}
-
-void XLATensor::resetOperationsState() {
+void XLATensorData::resetOperationsState() {
   operations_ = at::nullopt;
   operations_params_.clear();
 }

@@ -141,7 +141,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
 
   std::vector<xla::GlobalData*> inputs_params_buffers_data;
   for (auto p : inputs_params_buffers) {
-    inputs_params_buffers_data.push_back(p.get()->data());
+    inputs_params_buffers_data.push_back(p.get()->xlaData());
   }
   // TODO: move to ExecuteComputation (avoid transfer)
   // for that, one needs to know how to construct XLATensor from
@@ -224,7 +224,7 @@ void XlaModule::backward(
 
   std::vector<xla::GlobalData*> raw_grad_outputs_data;
   for (auto p : raw_grad_outputs) {
-    xla::GlobalData* ptr = p.get()->data();
+    xla::GlobalData* ptr = p.get()->xlaData();
     raw_grad_outputs_data.push_back(ptr);
   }
 
