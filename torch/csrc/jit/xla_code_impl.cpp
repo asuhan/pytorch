@@ -821,7 +821,7 @@ at::optional<xla::XlaOp> build_log_softmax_grad(
   const auto node_inputs = node->inputs();
   auto input_size = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_dimensions;
-  for (int64 broadcast_dim = 0; broadcast_dim < input_size.size();
+  for (size_t broadcast_dim = 0; broadcast_dim < input_size.size();
        ++broadcast_dim) {
     if (broadcast_dim == dim) {
       continue;
