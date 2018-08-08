@@ -218,7 +218,7 @@ class TestAvgPool(TestCase):
                 return F.avg_pool2d(x, 2, self.stride, self.padding, False, self.count_include_pad)
 
         x = torch.rand(1, 1, 3, 3)
-        for stride in [1, 2]:
+        for stride in [1, 2, None]:
             for padding in [0, 1]:
                 for count_include_pad in [False, True]:
                     model = XlaAvgPool(stride, padding, count_include_pad)
