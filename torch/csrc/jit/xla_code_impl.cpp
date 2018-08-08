@@ -817,11 +817,12 @@ at::optional<xla::XlaOp> build_log_softmax_grad(
     }
     broadcast_dimensions.push_back(broadcast_dim);
   }
-  
+
   const auto zero_literal = xla::Literal::CreateR0<float>(0);
-  const auto xla_zero = b->ConstantLiteral(*zero_literal);  
-  const auto sum = b->Reduce(grad_output, xla_zero, CreateAddComputation(), {dim});
-  
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);
+  const auto sum =
+      b->Reduce(grad_output, xla_zero, CreateAddComputation(), {dim});
+
   return b->Sub(grad_output, b->Mul(b->Exp(output), sum, broadcast_dimensions));
 }
 
@@ -1299,7 +1300,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::log_softmax_backward_data: {
         CHECK_EQ(node->inputs().size(), 3);
-        const auto xla_output_maybe = build_log_softmax_grad(node, *XLA_OP(0), *XLA_OP(1), &b);
+        const auto xla_output_maybe =
+            build_log_softmax_grad(node, *XLA_OP(0), *XLA_OP(1), &b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
