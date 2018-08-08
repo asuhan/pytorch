@@ -9,41 +9,80 @@
 namespace torch {
 namespace jit {
 
+class XLATensorData;
+
 class XLATensor : public std::enable_shared_from_this<XLATensor> {
  public:
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensor);
   XLATensor(const autograd::Variable&);
   XLATensor(const xla::Literal&);
 
-  at::Tensor toTensor();
+  virtual at::Tensor toTensor();
 
-  std::shared_ptr<XLATensor> grad() const;
-  void setGrad(std::shared_ptr<XLATensor> grad);
+  virtual std::shared_ptr<XLATensor> grad() const;
 
-  xla::Shape shape() const;
-  xla::GlobalData* data() const;
+  std::shared_ptr<XLATensorData> data() const;
+
+  virtual void setGrad(std::shared_ptr<XLATensor> grad);
+
+  virtual xla::Shape shape() const;
+
+  virtual xla::GlobalData* xlaData() const;
 
   // Basic tensor operations used by the optimizers.
-  void add_(XLATensor& other, const at::Scalar& alpha);
-  void mul_(XLATensor& other);
-  void mul_(const at::Scalar& other);
-  void zero_();
-  void detach_();
+  virtual void add_(XLATensor& other, const at::Scalar& alpha);
+
+  virtual void mul_(XLATensor& other);
+
+  virtual void mul_(const at::Scalar& other);
+
+  virtual void zero_();
 
   // Applies the queue of operations in preparation for using the data.
-  void applyOps();
+  virtual void applyOps();
+
+  virtual void detach_();
 
   // Applies the queue of operations for a list of tensors.
   static void applyOpsMulti(
       const std::vector<std::shared_ptr<XLATensor>>& tensors);
 
+ protected:
+  XLATensor() : requires_grad_(false) {}
+
+  std::shared_ptr<XLATensorData> data_;
+  bool requires_grad_;
+};
+
+class XLATensorData : public XLATensor {
+ public:
+  TH_DISALLOW_COPY_AND_ASSIGN(XLATensorData);
+  XLATensorData(const autograd::Variable&);
+  XLATensorData(const xla::Literal&);
+
+  at::Tensor toTensor() override;
+
+  std::shared_ptr<XLATensor> grad() const override;
+  void setGrad(std::shared_ptr<XLATensor> grad) override;
+
+  xla::Shape shape() const override;
+  xla::GlobalData* xlaData() const override;
+
+  // Basic tensor operations used by the optimizers.
+  void add_(XLATensor& other, const at::Scalar& alpha) override;
+  void mul_(XLATensor& other) override;
+  void mul_(const at::Scalar& other) override;
+  void zero_() override;
+
+  // Applies the queue of operations in preparation for using the data.
+  void applyOps() override;
+
  private:
   void resetOperationsState();
 
-  std::unique_ptr<xla::GlobalData> data_;
+  std::unique_ptr<xla::GlobalData> xla_data_;
   xla::Shape shape_;
   xla::PrimitiveType dtype_; // naming dtype for consistency with at::Tensor
-  bool requires_grad_;
   /* std::shared_ptr<xla::XlaComputation> grad_fn; */
   std::shared_ptr<XLATensor> grad_;
   // Keeps track of operations applied so far.

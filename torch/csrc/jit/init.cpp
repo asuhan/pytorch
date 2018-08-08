@@ -196,8 +196,11 @@ void initJITBindings(PyObject *module) {
       self->detach_();
       return self;
     })
-    .def_property_readonly("data", [](const XLATensor& m) -> py::object {
-      return py::cast<const XLATensor&>(m);
+    .def_property_readonly("data", [](std::shared_ptr<XLATensor> self) {
+      if (!self->data()) {
+        return py::cast<std::shared_ptr<XLATensor>>(self);
+      }
+      return py::cast<std::shared_ptr<XLATensor>>(self->data());
     })
     .def_property_readonly("is_leaf", [](const XLATensor&) {
       return true;
