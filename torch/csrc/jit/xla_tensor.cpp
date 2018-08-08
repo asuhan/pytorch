@@ -191,6 +191,9 @@ std::vector<int64> xla_shape_sizes(const xla::Shape& shape) {
 } // namespace
 
 void XLATensor::add_(XLATensor& other, const at::Scalar& alpha) {
+  if (other.operations_) {
+    other.applyOps();
+  }
   const auto alpha_literal = xla::Literal::CreateR0<float>(alpha.toDouble());
   const auto alpha_xla = b_.ConstantLiteral(*alpha_literal);
   const auto old_tensor =
@@ -207,7 +210,10 @@ void XLATensor::add_(XLATensor& other, const at::Scalar& alpha) {
   operations_params_.push_back(other.data_.get());
 }
 
-void XLATensor::mul_(const XLATensor& other) {
+void XLATensor::mul_(XLATensor& other) {
+  if (other.operations_) {
+    other.applyOps();
+  }
   const auto old_tensor =
       operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
   if (!operations_) {

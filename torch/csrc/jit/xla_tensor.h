@@ -25,7 +25,7 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
 
   // Basic tensor operations used by the optimizers.
   void add_(XLATensor& other, const at::Scalar& alpha);
-  void mul_(const XLATensor& other);
+  void mul_(XLATensor& other);
   void mul_(const at::Scalar& other);
   void zero_();
   void detach_();
