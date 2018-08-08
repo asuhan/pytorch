@@ -543,8 +543,12 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   std::vector<int64> window_strides;
-  window_strides.resize(2, 1);
-  window_strides.insert(window_strides.end(), stride.begin(), stride.end());
+  if (stride.empty()) {
+    window_strides = window_dimensions;
+  } else {
+    window_strides.resize(2, 1);
+    window_strides.insert(window_strides.end(), stride.begin(), stride.end());
+  }
   const auto& padding = node->is(attr::padding);
   CHECK_EQ(padding.size(), 2);
   const auto padding_config = make_padding_config(padding);
