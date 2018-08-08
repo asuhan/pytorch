@@ -464,6 +464,17 @@ class TestGradients(TestCase):
                 inputs = [torch.randn(4, chans, 28, 28, requires_grad=True)]
                 self.checkGrad(model, inputs, xla=True)
 
+    def test_logsoftmax(self):
+        for dim in [0, 1]: # todo test 3d as well
+            for batch in [1, 3, 4]:
+                class LSMGrad(nn.Module):
+                    def forward(self, x):
+                        return F.log_softmax(x, dim)
+
+                model = LSMGrad()
+                inputs = [torch.randn(batch, 9, requires_grad=True)]
+                self.checkGrad(model, inputs, xla=True)
+
     def test_mnist(self):
         model = XlaMNIST()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]

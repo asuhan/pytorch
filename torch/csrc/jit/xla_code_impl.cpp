@@ -799,6 +799,32 @@ at::optional<xla::XlaOp> build_log_softmax(
   return b->Sub(shifted_logits, b->Log(reduce), broadcast_dimensions);
 }
 
+at::optional<xla::XlaOp> build_log_softmax_grad(
+    const Node* node,
+    const xla::XlaOp& grad_output,
+    const xla::XlaOp& output,
+    xla::XlaBuilder* b) {
+  // Inspired from tf2xla.
+  int64 dim = node->i(attr::dim);
+
+  const auto node_inputs = node->inputs();
+  auto input_size = tensor_sizes(node_inputs[0]);
+  std::vector<int64> broadcast_dimensions;
+  for (int64 broadcast_dim = 0; broadcast_dim < input_size.size();
+       ++broadcast_dim) {
+    if (broadcast_dim == dim) {
+      continue;
+    }
+    broadcast_dimensions.push_back(broadcast_dim);
+  }
+  
+  const auto zero_literal = xla::Literal::CreateR0<float>(0);
+  const auto xla_zero = b->ConstantLiteral(*zero_literal);  
+  const auto sum = b->Reduce(grad_output, xla_zero, CreateAddComputation(), {dim});
+  
+  return b->Sub(grad_output, b->Mul(b->Exp(output), sum, broadcast_dimensions));
+}
+
 double one_elem_tensor_value(const at::Tensor& t) {
   switch (t.type().scalarType()) {
     case at::ScalarType::Long:
@@ -1262,6 +1288,18 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::log_softmax: {
         CHECK_EQ(node->inputs().size(), 1);
         const auto xla_output_maybe = build_log_softmax(node, *XLA_OP(0), &b);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        const auto current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::log_softmax_backward_data: {
+        CHECK_EQ(node->inputs().size(), 3);
+        const auto xla_output_maybe = build_log_softmax_grad(node, *XLA_OP(0), *XLA_OP(1), &b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
