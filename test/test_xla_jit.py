@@ -5,13 +5,10 @@ import torch.optim as optim
 from common import TestCase, run_tests
 
 
-def _xla_run(model, input, decompose_addmm=False):
+def _xla_run(model, input):
     traced_model = torch.jit.trace(input)(model)
-    if decompose_addmm:
-        fwd = traced_model._get_method('forward')
-        torch._C._jit_pass_decompose_addmm(fwd.graph)
     input_xla = torch._C.XLATensor(input)
-    xla_model = torch._C.XlaModule(traced_model, [input], False)
+    xla_model = torch._C.XlaModule(traced_model, [input], backward=True)
     output_xla = xla_model(input_xla)
     return output_xla.to_tensor()
 
@@ -153,12 +150,11 @@ class TestLinear(TestCase):
             def forward(self, x):
                 return self.linear(x)
 
-        for decompose_addmm in [False, True]:
-            x = torch.rand(4, 2)
-            model = XlaLinear()
-            out = _xla_run(model, x, decompose_addmm)
-            expected = model(x)
-            self.assertEqual(out.data, expected.data)
+        x = torch.rand(4, 2)
+        model = XlaLinear()
+        out = _xla_run(model, x)
+        expected = model(x)
+        self.assertEqual(out.data, expected.data)
 
 
 class TestConv(TestCase):
