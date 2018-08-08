@@ -529,6 +529,7 @@ class TestOptimizer(TestCase):
         self.checkSgd(lr=0.1, momentum=0, nsteps=1, do_zero_grad=True)
         self.checkSgd(lr=0.1, momentum=0, nsteps=2, do_zero_grad=False)
         self.checkSgd(lr=0.1, momentum=0.5, nsteps=1, do_zero_grad=True)
+        self.checkSgd(lr=0.1, momentum=0.5, nsteps=2, do_zero_grad=False)
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
