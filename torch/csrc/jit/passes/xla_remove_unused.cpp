@@ -29,9 +29,10 @@ static void eraseOutput(Node* node, int output_nr, Gradient& gradient) {
   // find indices in df's input
   auto df_gradout_idx = output_idx;
   auto df_out_idx = num_outputs + gradient.df_input_captured_inputs.size();
-  auto df_input_captured_outputs_idx = -1;
+  int df_input_captured_outputs_idx = -1;
   for (uint32_t i = 0; i < gradient.df_input_captured_outputs.size(); i++) {
-    if (output_idx == gradient.df_input_captured_outputs[i]) {
+    if (static_cast<uint64_t>(output_idx) ==
+        gradient.df_input_captured_outputs[i]) {
       df_out_idx += i;
       df_input_captured_outputs_idx = i;
     }
@@ -41,7 +42,8 @@ static void eraseOutput(Node* node, int output_nr, Gradient& gradient) {
       gradient.df_input_captured_outputs.begin() +
       df_input_captured_outputs_idx);
   for (uint32_t i = 0; i < gradient.df_input_captured_outputs.size(); i++) {
-    if (gradient.df_input_captured_outputs[i] > df_input_captured_outputs_idx) {
+    if (gradient.df_input_captured_outputs[i] >
+        static_cast<uint64_t>(df_input_captured_outputs_idx)) {
       gradient.df_input_captured_outputs[i] -= 1;
     }
   }
