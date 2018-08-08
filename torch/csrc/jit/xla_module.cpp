@@ -31,7 +31,7 @@ XlaModule::XlaModule(
     script::Module& module,
     std::vector<autograd::Variable>& inputs,
     bool backward)
-    : backward_graph_initialized(false), forward_graph_initialized(false) {
+    : forward_graph_initialized(false), backward_graph_initialized(false) {
   const auto forward = module.find_method("forward");
   JIT_ASSERT(forward);
 
@@ -84,10 +84,7 @@ XlaModule::XlaModule(
   ConstantFold(gradient.f);
   EliminateDeadCode(gradient.f);
   // run backward passes
-  std::vector<bool> defined;
-  for (auto i : gradient.df->inputs()) {
-    defined.push_back(true);
-  }
+  std::vector<bool> defined(gradient.df->inputs().size(), true);
   specializeUndef(*(gradient.df.get()), defined);
   ConstantFold(gradient.df);
   EliminateDeadCode(gradient.df);
@@ -250,11 +247,11 @@ void XlaModule::backward(
   JIT_ASSERT((inputs_.size() + params_.size()) == grad_inputs.size());
 
   // now set .grad attributes of the input and param tensors
-  for (int i = 0; i < inputs_.size(); i++) {
+  for (size_t i = 0; i < inputs_.size(); i++) {
     inputs_[i]->setGrad(grad_inputs[i]);
   }
 
-  for (int i = 0; i < params_.size(); i++) {
+  for (size_t i = 0; i < params_.size(); i++) {
     auto t = grad_inputs[i + inputs_.size()];
     params_[i]->setGrad(t);
   }

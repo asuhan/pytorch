@@ -782,7 +782,7 @@ at::optional<xla::XlaOp> build_log_softmax(
   auto input_size = tensor_sizes(node_inputs[0]);
 
   std::vector<int64> broadcast_dimensions;
-  for (int64 broadcast_dim = 0; broadcast_dim < input_size.size();
+  for (size_t broadcast_dim = 0; broadcast_dim < input_size.size();
        ++broadcast_dim) {
     if (broadcast_dim == dim) {
       continue;
@@ -814,7 +814,7 @@ at::optional<xla::XlaOp> build_log_softmax_grad(
   const auto node_inputs = node->inputs();
   auto input_size = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_dimensions;
-  for (int64 broadcast_dim = 0; broadcast_dim < input_size.size();
+  for (size_t broadcast_dim = 0; broadcast_dim < input_size.size();
        ++broadcast_dim) {
     if (broadcast_dim == dim) {
       continue;
@@ -1019,7 +1019,6 @@ xla::XlaOp build_compare_op(
   const float other = one_elem_tensor_value(node->t(attr::other));
   const auto other_literal = xla::Literal::CreateR0<float>(other);
   const auto xla_other = b->ConstantLiteral(*other_literal);
-  const auto node_inputs = node->inputs();
   xla::XlaOp pred;
   switch (node->kind()) {
     case aten::gt: {
