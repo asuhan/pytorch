@@ -41,7 +41,7 @@ MANUAL_IMPLEMENTATIONS = {
 # NO EFFECT otherwise.
 DONT_RECORD_TRACE = {
     'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d',
-    'conv_transpose2d', 'conv_transpose3d',
+    'conv_transpose2d', 'conv_transpose3d', 'nll_loss',
 }
 
 # These functions have their names recorded under trace renamed,

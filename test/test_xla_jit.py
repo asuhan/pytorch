@@ -317,7 +317,10 @@ def _random_like(tensor_list):
     random_tensors = []
     for o in tensor_list:
         if o.dtype == torch.float32 or o.dtype == torch.float64:
-            random_tensors += [torch.randn(*o.shape, dtype=o.dtype)]
+            if o.dim() == 0:
+                random_tensors += [o.clone().fill_(1)]
+            else:
+                random_tensors += [torch.randn(*o.shape, dtype=o.dtype)]
         elif o.dtype == torch.int64:
             # TODO remove this, we shouldn't be needing to pass random_tensor for long types
             random_tensors += [torch.empty_like(o)]
@@ -329,7 +332,10 @@ def _zeros_like(tensor_list):
     zeros_tensors = []
     for o in tensor_list:
         if o.dtype == torch.float32 or o.dtype == torch.float64:
-            zeros_tensors += [torch.zeros(*o.shape, dtype=o.dtype)]
+            if o.dim() == 0:
+                zeros_tensors += [o.clone().fill_(0)]
+            else:
+                zeros_tensors += [torch.zeros(*o.shape, dtype=o.dtype)]
         elif o.dtype == torch.int64:
             # TODO remove this, we shouldn't be needing to pass zeros_tensor for long types
             zeros_tensors += [torch.zeros_like(o)]
@@ -353,12 +359,15 @@ class TestGradients(TestCase):
         _forward_passes(gradient.f)
         _backward_passes(gradient.df)
 
+        print(gradient.f)
+
         ##############################################################
         # Run forward and backwarg graphs via jit interpreter
         exec_f = torch._C.GraphExecutor(gradient.f, False)
         exec_df = torch._C.GraphExecutor(gradient.df, False)
 
         # forward function
+        print(inputs_params_buffers)
         raw_outputs = exec_f(*inputs_params_buffers)
         raw_outputs = _maybe_list(raw_outputs)
         outputs = raw_outputs[:gradient.f_real_outputs]
@@ -474,6 +483,20 @@ class TestGradients(TestCase):
                 model = LSMGrad()
                 inputs = [torch.randn(batch, 9, requires_grad=True)]
                 self.checkGrad(model, inputs, xla=True)
+
+    def test_nllloss(self):
+        for batch in [1, 3, 4]:
+            num_classes = 9
+            # todo, check dim > or < 1, and 3D case
+            # weight = torch.ones(num_classes, dtype=torch.float32, requires_grad=False)
+            # model = nn.NLLLoss(weight)
+            model = nn.NLLLoss()
+            input = torch.randn(batch, num_classes, requires_grad=True)
+            input = F.log_softmax(input, dim=1)
+            input.detach_().requires_grad_()
+            target = torch.randint(num_classes, (batch, ), dtype=torch.int64, requires_grad=False)
+            inputs = [input, target]
+            self.checkGrad(model, inputs, xla=False)
 
     def test_mnist(self):
         model = XlaMNIST()

@@ -21,7 +21,7 @@ bool isDifferentiable(Node * n) {
     aten::sigmoid, aten::tanh, aten::mm, aten::chunk, aten::split, aten::t, aten::neg, aten::view,
     aten::unsqueeze, aten::expand, aten::addmm, aten::gt, aten::lt, aten::eq, aten::ne, aten::ge, aten::le, aten::type_as,
     aten::relu, aten::threshold, aten::exp, aten::max_pool2d, aten::avg_pool2d, prim::AutogradAdd,
-    aten::thnn_conv2d_forward, aten::thnn_batch_norm_forward, aten::log_softmax
+    aten::thnn_conv2d_forward, aten::thnn_batch_norm_forward, aten::log_softmax, aten::nll_loss_forward
   };
   // TODO: check this more generally via schema
   // This check ensures that the `alpha` and `beta` attributes on this addmm
@@ -278,6 +278,22 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
 	thisNode->addInput(grad_out);
 	thisNode->addInput(outputs.at(0));
 	thisNode->addInput(inputs.at(0));
+	graph->insertNode(thisNode);
+	return fmap<SymbolicVariable>(thisNode->outputs());
+      }
+      case aten::nll_loss_forward: {
+	auto graph = node->owningGraph();
+	auto thisNode = graph->create(aten::nll_loss_backward, 1)
+	  ->i_(attr::size_average, node->i(attr::size_average))
+	  ->i_(attr::ignore_index, node->i(attr::ignore_index))
+	  ->i_(attr::reduce, node->i(attr::reduce));
+	auto grad_out = grads.at(0);
+	thisNode->addInput(grad_out);
+	thisNode->addInput(inputs.at(0));
+	thisNode->addInput(inputs.at(1));
+	thisNode->addInput(inputs.at(2));
+	thisNode->addInput(outputs.at(0));
+	thisNode->addInput(outputs.at(1));
 	graph->insertNode(thisNode);
 	return fmap<SymbolicVariable>(thisNode->outputs());
       }
