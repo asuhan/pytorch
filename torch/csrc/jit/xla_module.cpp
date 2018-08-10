@@ -105,6 +105,7 @@ XlaModule::XlaModule(
 std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     const std::vector<std::shared_ptr<XLATensor>>& inputs) {
   XLATensor::applyOpsMulti(inputs);
+  XLATensor::applyOpsMulti(params_);
   // clear the previous forward's captured vectors.
   // This is needed in case backward is not yet run, but two forward calls were
   // made
@@ -186,6 +187,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
 void XlaModule::backward(
     const std::vector<std::shared_ptr<XLATensor>>& grad_outputs) {
   XLATensor::applyOpsMulti(grad_outputs);
+  XLATensor::applyOpsMulti(params_);
   std::vector<std::shared_ptr<XLATensor>> raw_grad_outputs;
 
   for (auto p : grad_outputs) {
