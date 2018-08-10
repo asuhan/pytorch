@@ -19,11 +19,6 @@
 #include <mutex>
 #include <ostream>
 #include <stdexcept>
-
-#ifdef WITH_XLA
-#include "torch/csrc/jit/xla_code_impl.h"
-#endif  // WITH_XLA
-
 #include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
