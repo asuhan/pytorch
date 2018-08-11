@@ -144,15 +144,55 @@ xla::XlaOp build_binary_op(
   }
 }
 
+int64_t int_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto& node_outputs = node->outputs();
+    CHECK_EQ(node_outputs.size(), size_t(1));
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      CHECK(output->type()->kind() == TypeKind::IntType);
+      return node->i(attr::value);
+    }
+  }
+  CHECK(false) << "Constant with id " << id << " not found.";
+}
+
+std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  std::vector<int64_t> result;
+  for (const auto node : nodes) {
+    if (node->kind() != prim::ListConstruct) {
+      continue;
+    }
+    const auto& node_outputs = node->outputs();
+    CHECK_EQ(node_outputs.size(), size_t(1));
+    const auto output = node_outputs[0];
+    if (output->unique() != id) {
+      continue;
+    }
+    const auto& node_inputs = node->inputs();
+    for (const auto input : node_inputs) {
+      result.push_back(int_attr(node, input->unique()));
+    }
+    return result;
+  }
+  CHECK(false) << "Constant with id " << id << " not found.";
+}
+
 xla::XlaOp build_convolution(
     const Node* node,
     const xla::XlaOp& lhs,
     const xla::XlaOp& rhs,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto stride_sym = Symbol::attr("stride");
-  CHECK(node->hasAttribute(stride_sym));
-  const auto window_strides = xla_i64_list(node->is(stride_sym));
+  const auto& node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), size_t(4));
+  const auto window_strides =
+      xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
   return b->Add(b->Conv(lhs, rhs, window_strides, xla::Padding::kValid), bias);
 }
 
@@ -190,11 +230,12 @@ xla::XlaOp build_max_pool2d(
     xla::XlaBuilder* b) {
   const auto max_computation = CreateMaxComputation();
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
-  const auto kernel_size_sym = Symbol::attr("kernel_size");
-  CHECK(node->hasAttribute(kernel_size_sym));
+  const auto& node_inputs = node->inputs();
+  CHECK_GE(node_inputs.size(), size_t(2));
+  const auto kernel_size =
+      xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
-  const auto kernel_size = xla_i64_list(node->is(kernel_size_sym));
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   const auto window_strides = window_dimensions;
@@ -222,12 +263,11 @@ at::optional<xla::XlaOp> build_log_softmax(
     const xla::XlaOp& logits,
     xla::XlaBuilder* b) {
   // Inspired from tf2xla.
-  const auto dim_sym = Symbol::attr("dim");
-  CHECK(node->hasAttribute(dim_sym));
-
-  int64_t dim = node->i(dim_sym);
+  const auto& node_inputs = node->inputs();
+  CHECK_EQ(node_inputs.size(), size_t(2));
+  int64_t dim = int_attr(node, node_inputs[1]->unique());
   if (dim != 0 && dim != 1) {
-    LOG(INFO) << "log_softmax not supported for dim=" << node->i(dim_sym);
+    LOG(INFO) << "log_softmax not supported for dim=" << dim;
     return at::nullopt;
   }
 
@@ -251,41 +291,44 @@ at::optional<xla::XlaOp> build_log_softmax(
   return b->Sub(shifted_logits, b->Log(reduce), {batch_dim});
 }
 
-double one_elem_tensor_value(const at::Tensor& t) {
-  switch (t.type().scalarType()) {
-    case at::ScalarType::Long:
-      return *t.data<int64_t>();
-    case at::ScalarType::Double:
-      return *t.data<double>();
-    default:
-      LOG(FATAL) << "Type not supported";
+float float_attr(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto& node_outputs = node->outputs();
+    CHECK_EQ(node_outputs.size(), size_t(1));
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      switch (node_outputs[0]->type()->kind()) {
+        case TypeKind::FloatType:
+          return node->f(attr::value);
+        case TypeKind::IntType:
+          return node->i(attr::value);
+        default:
+          CHECK(false) << "Cannot cast type to float";
+      }
+    }
   }
+  CHECK(false) << "Constant with id " << id << " not found.";
 }
 
 xla::XlaOp build_threshold(
     const Node* node,
     const xla::XlaOp& input,
     xla::XlaBuilder* b) {
-  const auto threshold_sym = Symbol::attr("threshold");
-  CHECK(node->hasAttribute(threshold_sym));
-  const auto& threshold_tensor = node->t(threshold_sym);
-  CHECK_EQ(threshold_tensor.ndimension(), 0);
-  const auto threshold_literal =
-      xla::Literal::CreateR0<float>(one_elem_tensor_value(threshold_tensor));
-  const auto threshold = b->ConstantLiteral(*threshold_literal);
-  const auto value_sym = Symbol::attr("value");
-  CHECK(node->hasAttribute(value_sym));
-  const auto& value_tensor = node->t(value_sym);
-  CHECK_EQ(value_tensor.ndimension(), 0);
-  const auto value_literal =
-      xla::Literal::CreateR0<float>(one_elem_tensor_value(value_tensor));
-  const auto value = b->ConstantLiteral(*value_literal);
   const auto& node_inputs = node->inputs();
   const auto input_type = node_inputs[0]->type()->cast<TensorType>();
   CHECK(input_type);
-  const std::vector<int64_t>& input_sizes = input_type->sizes();
+  const auto threshold_literal =
+      xla::Literal::CreateR0<float>(float_attr(node, node_inputs[1]->unique()));
+  const auto threshold = b->ConstantLiteral(*threshold_literal);
+  const auto value_literal =
+      xla::Literal::CreateR0<float>(float_attr(node, node_inputs[2]->unique()));
+  const auto value = b->ConstantLiteral(*value_literal);
+  const auto& input_sizes = input_type->sizes();
   std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
-  std::copy(input_sizes.begin(), input_sizes.end(), broadcast_sizes.begin());
   return b->Select(
       b->Gt(input, threshold), input, b->Broadcast(value, broadcast_sizes));
 }
@@ -333,7 +376,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     switch (node->kind()) {
       case aten::add:
       case aten::mul: {
-        if (node->inputs().size() != 2) {
+        if (node->inputs().size() < 2) {
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
@@ -344,10 +387,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::_convolution: {
-        if (node->inputs().size() != 3) {
-          LOG(INFO) << "Unsupported convolution";
-          return at::nullopt;
-        }
+        CHECK_GE(node->inputs().size(), size_t(3));
         xla::XlaOp xla_output =
             build_convolution(node, XLA_OP(0), XLA_OP(1), XLA_OP(2), &b);
         current_unique = output_id(node);
@@ -364,7 +404,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::addmm: {
-        if (node->inputs().size() != 3) {
+        if (node->inputs().size() < 3) {
           LOG(INFO) << "Unsupported linear layer";
           return at::nullopt;
         }
@@ -375,8 +415,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         CHECK(it_ok.second);
         break;
       }
-      case aten::max_pool2d: {
-        CHECK_EQ(node->inputs().size(), 1);
+      case aten::max_pool2d_with_indices: {
+        CHECK_GE(node->inputs().size(), 1);
         xla::XlaOp xla_output = build_max_pool2d(node, XLA_OP(0), &b);
         current_unique = node->outputs()[0]->unique(); // ignore indices
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -394,7 +434,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::threshold: {
-        CHECK_EQ(node->inputs().size(), 1);
+        CHECK_EQ(node->inputs().size(), 3);
         xla::XlaOp xla_output = build_threshold(node, XLA_OP(0), &b);
         current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -402,7 +442,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::log_softmax: {
-        CHECK_EQ(node->inputs().size(), 1);
+        CHECK_EQ(node->inputs().size(), size_t(2));
         const auto xla_output_maybe = build_log_softmax(node, XLA_OP(0), &b);
         if (!xla_output_maybe) {
           return at::nullopt;
@@ -411,6 +451,10 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         const auto it_ok =
             node_xla_ops.emplace(current_unique, *xla_output_maybe);
         CHECK(it_ok.second);
+        break;
+      }
+      case prim::Constant:
+      case prim::ListConstruct: {
         break;
       }
       default:
