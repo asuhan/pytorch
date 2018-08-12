@@ -185,11 +185,8 @@ std::vector<int64_t> tensor_sizes(const Value* tensor) {
 std::vector<std::pair<int64, int64>> make_padding(
     const Node* node,
     const size_t padding_input_index) {
-  const auto node_inputs = node->inputs();
-  CHECK_GE(node_inputs.size(), padding_input_index + 1);
   std::vector<std::pair<int64, int64>> dims_padding;
-  const auto padding =
-      int_list_attr(node, node_inputs[padding_input_index]->unique());
+  const auto padding = int_list_attr(node, attr::padding);
   for (const auto dim_padding : padding) {
     dims_padding.emplace_back(dim_padding, dim_padding);
   }
@@ -203,8 +200,7 @@ xla::XlaOp build_convolution(
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(5));
-  const auto window_strides =
-      xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
+  const auto window_strides = xla_i64_list(int_list_attr(node, attr::stride));
   const auto dims_padding = make_padding(node, 4);
   return b->ConvWithGeneralPadding(lhs, rhs, window_strides, dims_padding);
 }
@@ -217,8 +213,7 @@ xla::XlaOp build_convolution_bias(
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(4));
-  const auto window_strides =
-      xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
+  const auto window_strides = xla_i64_list(int_list_attr(node, attr::stride));
   const auto bias_size = tensor_sizes(node_inputs[2]);
   const auto node_outputs = node->outputs();
   CHECK_EQ(node_outputs.size(), 1);
@@ -267,14 +262,13 @@ xla::XlaOp build_max_pool2d(
   const auto init_value = xla::Literal::MinValue(xla::PrimitiveType::F32);
   const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(4));
-  const auto kernel_size =
-      xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
+  const auto kernel_size = xla_i64_list(int_list_attr(node, attr::kernel_size));
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   std::vector<int64> window_strides;
-  const auto stride = int_list_attr(node, node_inputs[2]->unique());
+  const auto stride = int_list_attr(node, attr::stride);
   if (stride.empty()) {
     window_strides = window_dimensions;
   } else {
@@ -328,11 +322,11 @@ xla::XlaOp build_max_pool2d_backward(
   const auto scatter = CreateAddComputation();
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
-  const auto kernel_size = int_list_attr(node, 2);
+  const auto kernel_size = int_list_attr(node, attr::kernel_size);
   window_dimensions.insert(
       window_dimensions.end(), kernel_size.begin(), kernel_size.end());
   std::vector<int64> window_strides;
-  const auto stride = int_list_attr(node, 3);
+  const auto stride = int_list_attr(node, attr::stride);
   if (stride.empty()) {
     window_strides = window_dimensions;
   } else {
@@ -358,8 +352,7 @@ xla::XlaOp build_max_pool2d_backward(
 bool avg_pool2d_supported(const Node* node) {
   const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(6));
-  const auto ceil_mode =
-      int_attr(node, node->namedInput(attr::ceil_mode)->unique());
+  const auto ceil_mode = int_attr(node, attr::ceil_mode);
   if (ceil_mode) {
     LOG(INFO) << "ceil_mode not supported for avg_pool2d yet";
     return false;
@@ -377,10 +370,8 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   }
   const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(6));
-  const auto kernel_size =
-      xla_i64_list(int_list_attr(node, node_inputs[1]->unique()));
-  const auto stride =
-      xla_i64_list(int_list_attr(node, node_inputs[2]->unique()));
+  const auto kernel_size = xla_i64_list(int_list_attr(node, attr::kernel_size));
+  const auto stride = xla_i64_list(int_list_attr(node, attr::stride));
   std::vector<int64> window_dimensions;
   window_dimensions.resize(2, 1);
   window_dimensions.insert(
@@ -388,8 +379,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
   std::vector<int64> window_strides;
   window_strides.resize(2, 1);
   window_strides.insert(window_strides.end(), stride.begin(), stride.end());
-  const auto padding =
-      xla_i64_list(int_list_attr(node, node_inputs[3]->unique()));
+  const auto padding = xla_i64_list(int_list_attr(node, attr::padding));
   CHECK_EQ(padding.size(), 2);
   xla::PaddingConfig padding_config;
   for (int i = 0; i < 2; ++i) {
@@ -411,7 +401,7 @@ at::optional<xla::XlaOp> build_avg_pool2d(
       window_dimensions,
       window_strides,
       xla::Padding::kValid);
-  const auto count_include_pad = int_attr(node, node_inputs[5]->unique());
+  const auto count_include_pad = int_attr(node, attr::count_include_pad);
   if (count_include_pad) {
     const auto kernel_elements = std::accumulate(
         kernel_size.begin(),
@@ -464,10 +454,8 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
   if (!avg_pool2d_supported(node)) {
     return at::nullopt;
   }
-  const auto kernel_size = xla_i64_list(
-      int_list_attr(node, node->namedInput(attr::kernel_size)->unique()));
-  const auto stride = xla_i64_list(
-      int_list_attr(node, node->namedInput(attr::stride)->unique()));
+  const auto kernel_size = xla_i64_list(int_list_attr(node, attr::kernel_size));
+  const auto stride = xla_i64_list(int_list_attr(node, attr::stride));
   if (stride.empty() || stride[0] != 1 || stride[1] != 1) {
     // TODO
     return at::nullopt;
@@ -480,8 +468,7 @@ at::optional<xla::XlaOp> build_avg_pool2d_backward(
   std::vector<int64> window_strides;
   window_strides.resize(2, 1);
   window_strides.insert(window_strides.end(), stride.begin(), stride.end());
-  const auto padding =
-      int_list_attr(node, node->namedInput(attr::padding)->unique());
+  const auto padding = int_list_attr(node, attr::padding);
   CHECK_EQ(padding.size(), 2);
   if (padding[0] || padding[1]) {
     // TODO
@@ -528,7 +515,7 @@ at::optional<xla::XlaOp> build_log_softmax(
   // Inspired from tf2xla.
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), size_t(2));
-  int64_t dim = int_attr(node, node_inputs[1]->unique());
+  int64_t dim = int_attr(node, attr::dim);
 
   auto input_size = tensor_sizes(node_inputs[0]);
 
@@ -560,10 +547,10 @@ xla::XlaOp build_threshold(
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
   const auto threshold_literal =
-      xla::Literal::CreateR0<float>(float_attr(node, node_inputs[1]->unique()));
+      xla::Literal::CreateR0<float>(float_attr(node, attr::threshold));
   const auto threshold = b->ConstantLiteral(*threshold_literal);
   const auto value_literal =
-      xla::Literal::CreateR0<float>(float_attr(node, node_inputs[2]->unique()));
+      xla::Literal::CreateR0<float>(float_attr(node, attr::value));
   const auto value = b->ConstantLiteral(*value_literal);
   const auto input_sizes = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
@@ -663,7 +650,7 @@ at::optional<xla::XlaOp> build_stack(
   const auto node_inputs = node->inputs();
   CHECK_EQ(node_inputs.size(), size_t(2));
   const auto stack_inputs = input_list_attr(node, node_inputs[0]->unique());
-  const auto dim = int_attr(node, node_inputs[1]->unique());
+  const auto dim = int_attr(node, attr::dim);
   std::vector<xla::XlaOp> reshaped_inputs;
   // Reshape inputs along the dim axis.
   for (size_t i = 0; i < stack_inputs.size(); ++i) {
@@ -688,8 +675,7 @@ xla::XlaOp build_batch_norm(
     const xla::XlaOp& weight,
     const xla::XlaOp& bias,
     xla::XlaBuilder* b) {
-  const auto node_inputs = node->inputs();
-  const auto eps = float_attr(node, node_inputs[7]->unique());
+  const auto eps = float_attr(node, attr::eps);
   return b->GetTupleElement(
       b->BatchNormTraining(input, weight, bias, eps, 1), 0);
 }

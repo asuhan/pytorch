@@ -115,6 +115,8 @@ bool outputRequiresGrad(Node* node, std::function<bool(Value*)> requires_grad) {
   }
 }
 
+namespace {
+
 int64_t int_attr(const Node* parent, const size_t id) {
   const auto nodes = parent->owningGraph()->block()->nodes();
   for (const auto node : nodes) {
@@ -132,7 +134,14 @@ int64_t int_attr(const Node* parent, const size_t id) {
   JIT_ASSERTM(false, "Constant with id ", id, " not found.");
 }
 
-std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
+}  // namespace
+
+int64_t int_attr(const Node* parent, const Symbol& attr) {
+  return int_attr(parent, parent->namedInput(attr)->unique());
+}
+
+std::vector<int64_t> int_list_attr(const Node* parent, const Symbol& attr) {
+  const auto id = parent->namedInput(attr)->unique();
   const auto nodes = parent->owningGraph()->block()->nodes();
   std::vector<int64_t> result;
   for (const auto node : nodes) {
@@ -159,7 +168,8 @@ std::vector<int64_t> int_list_attr(const Node* parent, const size_t id) {
   JIT_ASSERTM(false, "Constant with id ", id, " not found.");
 }
 
-float float_attr(const Node* parent, const size_t id) {
+float float_attr(const Node* parent, const Symbol& attr) {
+  const auto id = parent->namedInput(attr)->unique();
   const auto nodes = parent->owningGraph()->block()->nodes();
   for (const auto node : nodes) {
     if (node->kind() != prim::Constant) {
@@ -320,11 +330,11 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
 
     } else if (node->matches("aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, int ceil_mode, int count_include_pad) -> Tensor")) {
       JIT_ASSERT(grads.size() == 1);
-      const auto kernel_size = int_list_attr(node, node->namedInput(attr::kernel_size)->unique());
-      const auto stride = int_list_attr(node, node->namedInput(attr::stride)->unique());
-      const auto padding = int_list_attr(node, node->namedInput(attr::padding)->unique());
-      const auto ceil_mode = int_attr(node, node->namedInput(attr::ceil_mode)->unique());
-      const auto count_include_pad = int_attr(node, node->namedInput(attr::count_include_pad)->unique());
+      const auto kernel_size = int_list_attr(node, attr::kernel_size);
+      const auto stride = int_list_attr(node, attr::stride);
+      const auto padding = int_list_attr(node, attr::padding);
+      const auto ceil_mode = int_attr(node, attr::ceil_mode);
+      const auto count_include_pad = int_attr(node, attr::count_include_pad);
       return {SymbolicVariable::avg_pool2d_backward(grads.at(0), inputs.at(0),
                                                     kernel_size, stride,
                                                     padding, ceil_mode,
@@ -332,11 +342,11 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
                                                     nullptr, nullptr, nullptr, nullptr, nullptr};
     } else if (node->matches("aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)")) {
       JIT_ASSERT(grads.size() == 2);
-      const auto kernel_size = int_list_attr(node, node->namedInput(attr::kernel_size)->unique());
-      const auto stride = int_list_attr(node, node->namedInput(attr::stride)->unique());
-      const auto padding = int_list_attr(node, node->namedInput(attr::padding)->unique());
-      const auto dilation = int_list_attr(node, node->namedInput(attr::dilation)->unique());
-      const auto ceil_mode = int_attr(node, node->namedInput(attr::ceil_mode)->unique());
+      const auto kernel_size = int_list_attr(node, attr::kernel_size);
+      const auto stride = int_list_attr(node, attr::stride);
+      const auto padding = int_list_attr(node, attr::padding);
+      const auto dilation = int_list_attr(node, attr::dilation);
+      const auto ceil_mode = int_attr(node, attr::ceil_mode);
       return {SymbolicVariable::max_pool2d_with_indices_backward(grads.at(0), inputs.at(0),
                                                                  grads.at(1),
                                                                  node->is(attr::kernel_size),
