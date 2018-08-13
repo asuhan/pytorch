@@ -375,7 +375,16 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       convNode->addInput(outputs.at(2));
       convNode->addInput(graph->insertConstant(std::vector<int64_t>{1, 1, 1}));
       graph->insertNode(convNode);
-      return fmap<SymbolicVariable>(convNode->outputs());
+      auto outputs = convNode->outputs();
+      JIT_ASSERT(outputs.size() == size_t(3));
+      std::vector<SymbolicVariable> result;
+      result.emplace_back(outputs[0]);
+      result.emplace_back(outputs[1]);
+      result.emplace_back();
+      result.emplace_back(outputs[2]);
+      result.emplace_back();
+      result.emplace_back();
+      return result;
 
     } else if (node->kind() == prim::Constant) {
       return {};
