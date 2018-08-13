@@ -381,7 +381,6 @@ class TestGradients(TestCase):
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
         self.checkGrad(model, inputs)
 
-    @unittest.skip("Rebase wip")
     def test_conv2d(self):
         for ichans in [1, 15, 32]:
             for ochans in [1, 13, 32]:
