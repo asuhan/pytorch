@@ -571,9 +571,6 @@ static void liftConstants(Gradient& grad_desc, ReverseDetails& rev_info) {
     }
   }
 
-  // It's possible the we've cloned the same constants many times,
-  // so we use CSE to deduplicate them.
-  EliminateCommonSubexpression(reverse_block);
 }
 
 // Takes a grad_desc.f returned from `addReverseInline` and splits off the
@@ -723,6 +720,10 @@ Gradient differentiate(std::shared_ptr<Graph>& graph, const std::vector<bool>& r
   // Fills in f, df, f_real_outputs, df_input_captures,
   // modifies df_input_vjps (new vjps are added for temporaries)
   lambdaLiftReverse(grad_desc, rev_info);
+  // It's possible the we've cloned the same constants many times in liftConstants
+  // so we use CSE to deduplicate them. We can't do that earlier, because this might
+  // invalidate entries in the grad_map.
+  EliminateCommonSubexpression(grad_desc.df);
   return grad_desc;
 }
 
