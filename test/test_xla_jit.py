@@ -440,7 +440,6 @@ class TestGradients(TestCase):
         self.checkGrad(model, inputs, xla=True)
 
 
-    @unittest.skip("Rebase wip")
     def test_maxpool(self):
         class MaxPoolGrad(nn.Module):
             def forward(self, x):

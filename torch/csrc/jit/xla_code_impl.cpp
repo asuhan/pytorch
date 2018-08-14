@@ -1261,7 +1261,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::max_pool2d_with_indices_backward: {
-        CHECK_EQ(node->inputs().size(), 7);
+        CHECK_EQ(node->inputs().size(), 8);
         xla::XlaOp xla_output =
             build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
         const auto current_unique = output_id(node);

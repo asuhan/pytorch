@@ -68,7 +68,9 @@ static void eraseOutput(Node* node, int output_nr, Gradient& gradient) {
     }
     JIT_ASSERT(node_grad_output_idx == -1); // assert it's not used anywhere
     if (node_output_idx != -1) {
-      it->removeInput(node_output_idx);
+      it->replaceInput(
+          node_output_idx,
+          gradient.df->insertConstant(at::empty(at::CPU(at::kLong), {})));
     }
   }
 
@@ -94,7 +96,7 @@ void XlaRemoveUnused(Gradient& gradient) {
         eraseOutput(*it, 1, gradient);
         break;
       }
-      case aten::max_pool2d: {
+      case aten::max_pool2d_with_indices: {
         at::ArrayRef<Value*> outputs = it->outputs();
         JIT_ASSERT(outputs.size() == 2);
         eraseOutput(*it, 1, gradient);
