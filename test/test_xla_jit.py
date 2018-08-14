@@ -482,7 +482,6 @@ class TestGradients(TestCase):
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
         self.checkGrad(model, inputs, xla=True)
 
-    @unittest.skip("Rebase wip")
     def test_resnet(self):
         import torchvision
         model = torchvision.models.resnet50()

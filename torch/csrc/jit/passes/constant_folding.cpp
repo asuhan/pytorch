@@ -126,6 +126,7 @@ void ApplyConstantsToGraph(Graph* graph, const ConstantEvaluator& evaluator) {
       if (element.size() != 1) {
         continue;
       }
+      WithInsertPoint insert_point_guard(node);
       node->replaceInput(elem_idx, graph->insertConstant(element[elem_idx]));
     }
   }
