@@ -203,9 +203,17 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
     auto outputs = fmap<SymbolicVariable>(node->outputs());
 
     if (node->matches("aten::add(Tensor self, Tensor other, *, Scalar alpha) -> Tensor")) {
+      const auto alpha = *node->get<at::Scalar>(attr::alpha);
+      if (SymbolicVariable::isConstInt(alpha, 1)) {
+        return {grads.at(0), grads.at(0), nullptr};
+      }
       return {grads.at(0), grads.at(0) * node->namedInput(attr::alpha), nullptr};
 
     } else if (node->matches("aten::sub(Tensor self, Tensor other, *, Scalar alpha) -> Tensor")) {
+      const auto alpha = *node->get<at::Scalar>(attr::alpha);
+      if (SymbolicVariable::isConstInt(alpha, 1)) {
+        return {grads.at(0), -grads.at(0), nullptr};
+      }
       return {grads.at(0), -grads.at(0) * node->namedInput(attr::alpha), nullptr};
 
     } else if (node->matches("aten::mul(Tensor self, Tensor other) -> Tensor")) {
