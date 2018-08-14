@@ -119,7 +119,7 @@ xla::XlaOp build_convolution_bias(
   const auto node_inputs = node->inputs();
   CHECK_GE(node_inputs.size(), size_t(4));
   const auto window_strides = xla_i64_list(int_list_attr(node, attr::stride));
-  const auto bias_size = tensor_sizes(node_inputs[2]);
+  const auto bias_size = tensor_sizes(node_inputs[3]);
   const auto node_outputs = node->outputs();
   auto broadcast_sizes = xla_i64_list(tensor_sizes(node_outputs[0]));
   CHECK_EQ(broadcast_sizes.size(), 4);
@@ -144,7 +144,7 @@ xla::XlaOp build_thnn_conv2d_backward_input(
     const xla::XlaOp& weight,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
-  CHECK_EQ(node_inputs.size(), 7);
+  CHECK_EQ(node_inputs.size(), 9);
   const auto padding_attr = int_list_attr(node, attr::padding);
   CHECK_EQ(padding_attr.size(), 2);
   // Adjust input size to account for specified padding.
@@ -268,7 +268,7 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
   constexpr int n_dim = 0;
   constexpr int c_dim = 1;
   const auto node_inputs = node->inputs();
-  CHECK_EQ(node_inputs.size(), 7);
+  CHECK_EQ(node_inputs.size(), 9);
   const auto padding_attr = int_list_attr(node, attr::padding);
   CHECK_EQ(padding_attr.size(), 2);
   // Adjust input size to account for specified padding.
@@ -1188,9 +1188,9 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         }
 
         xla::XlaOp xla_output;
-        if (XLA_OP(2)) { // bias exists
+        if (XLA_OP(3)) { // bias exists
           xla_output = build_convolution_bias(
-              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(3), &b);
         } else {
           xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
         }
@@ -1200,7 +1200,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         break;
       }
       case aten::thnn_conv2d_backward: {
-        CHECK_EQ(node->inputs().size(), 7);
+        CHECK_EQ(node->inputs().size(), 9);
         const auto conv2d_grads = build_thnn_conv2d_backward(
             node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         const auto node_outputs = node->outputs();
