@@ -110,8 +110,7 @@ xla::XlaComputationClient* XlaGetClient() {
   return &client_;
 }
 
-XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
-}
+XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {}
 
 at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
     const std::vector<at::Tensor>& inputs) const {
