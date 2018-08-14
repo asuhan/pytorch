@@ -105,7 +105,7 @@ namespace torch {
 namespace jit {
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {
-  // ConstantFold(graph_);
+  ConstantFold(graph_);
   EliminateDeadCode(graph_);
 }
 
