@@ -15,11 +15,11 @@ static void DecomposeAddmm(Block* block) {
     // followed by an add so that it can go through the existing optimization,
     // shape analysis and differentiation passes for those two individual ops.
     // Later, we will fuse together those two ops into a single addmm.
-    if (it->kind() == aten::addmm && it->inputs().size() == 3) {
-      auto alpha = it->get<at::Scalar>(attr::alpha);
-      auto beta = it->get<at::Scalar>(attr::beta);
-      if (!alpha || !beta) continue;
-      if (alpha->toDouble() != 1.0 || beta->toDouble() != 1.0) continue;
+    if (it->matches("aten::addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta, Scalar alpha) -> Tensor",
+		    /*with_const=*/{attr::alpha, attr::beta})) {
+      auto alpha = it->get<at::Scalar>(attr::alpha).value();
+      auto beta = it->get<at::Scalar>(attr::beta).value();
+      if (alpha.toDouble() != 1.0 || beta.toDouble() != 1.0) continue;
 
       WithInsertPoint guard(*it);
 
