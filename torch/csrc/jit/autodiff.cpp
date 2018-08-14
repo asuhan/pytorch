@@ -74,8 +74,8 @@ bool isDifferentiable(Node * n) {
   if (n->matches("aten::squeeze(Tensor self, int dim) -> Tensor")) {
     return n->namedInput(attr::self)->type()->cast<TensorType>() && n->is_constant(attr::dim);
   }
-  if (n->matches("aten::expand(Tensor self, int[] size, *, int implicit) -> Tensor")) {
-    return n->is_constant(attr::size) && n->is_constant(attr::implicit);
+  if (n->matches("aten::expand(Tensor self, int[] size, int implicit) -> Tensor")) {
+    return true;  // TODO(asuhan)
   }
   if (n->matches("aten::view(Tensor self, int[] size) -> Tensor") ||
       n->matches("aten::reshape(Tensor self, int[] shape) -> Tensor")) {
@@ -284,11 +284,11 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       }
       return {dmat1, dmat2};
 
-    } else if (node->matches("aten::expand(Tensor self, int[] size, *, int implicit) -> Tensor")) {
+    } else if (node->matches("aten::expand(Tensor self, int[] size, int implicit) -> Tensor")) {
       const auto& input_sizes = inputs.at(0).sizes();
       if (input_sizes.size() == 0)
         return {grads.at(0).sum(), nullptr, nullptr};
-      auto grad_sizes = node->get<std::vector<int64_t>>(attr::size).value();
+      auto grad_sizes = int_list_attr(node, attr::size);
       auto grad = grads.at(0);
       while (grad_sizes.size() > input_sizes.size()) {
         grad = grad.sum(0, false);

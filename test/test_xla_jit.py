@@ -141,7 +141,6 @@ class TestExpand(TestCase):
 
 
 class TestLinear(TestCase):
-    @unittest.skip("Rebase wip")
     def test(self):
 
         class XlaLinear(nn.Module):
@@ -283,7 +282,6 @@ class XlaMNIST(nn.Module):
         return F.log_softmax(x, dim=1)
 
 class TestMNIST(TestCase):
-    @unittest.skip("Rebase wip")
     def test(self):
         batch_size = 32
         x = torch.randn(batch_size, 1, 28, 28)
@@ -479,11 +477,10 @@ class TestGradients(TestCase):
                 inputs = [torch.randn(batch, 9, requires_grad=True)]
                 self.checkGrad(model, inputs, xla=True)
 
-    @unittest.skip("Rebase wip")
     def test_mnist(self):
         model = XlaMNIST()
         inputs = [torch.randn(4, 1, 28, 28, requires_grad=True)]
-        self.checkGrad(model, inputs, xla=False)
+        self.checkGrad(model, inputs, xla=True)
 
     @unittest.skip("Rebase wip")
     def test_resnet(self):
@@ -528,7 +525,6 @@ class TestOptimizer(TestCase):
             updated_params = [p.data for p in model.parameters()]
             self.assertEqual(xla_updated_params, updated_params);
 
-    @unittest.skip("Rebase wip")
     def test_sgd(self):
         self.checkSgd(lr=0.1, momentum=0, nsteps=1, do_zero_grad=True)
         self.checkSgd(lr=0.1, momentum=0, nsteps=2, do_zero_grad=False)
