@@ -385,6 +385,7 @@ class TestGradients(TestCase):
             grads_output_xla = [torch._C.XLATensor(grad_output) for grad_output in grad_outputs[:gradient.f_real_outputs]]
             xla_model.backward(*grads_output_xla)
             grad_inputs_xla = [input_xla.grad.to_tensor() for input_xla in inputs_xla]
+            grad_inputs_xla.extend([p.grad.to_tensor() for p in xla_model.parameters()])
         ##############################################################
         # forward + backward with regular autograd / torch
         outputs_gt = model(*inputs)
