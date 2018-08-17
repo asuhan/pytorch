@@ -144,22 +144,20 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
   for (auto p : inputs_params_buffers) {
     inputs_params_buffers_data.push_back(p.get()->xlaData());
   }
-  // TODO: move to ExecuteComputation (avoid transfer)
-  // for that, one needs to know how to construct XLATensor from
-  // xla::GlobalData*
-  auto result_literal = client_->ExecuteComputationAndTransfer(
-      forward_graph_, inputs_params_buffers_data);
+  auto result_dh =
+      client_->ExecuteComputation(forward_graph_, inputs_params_buffers_data);
   std::vector<std::shared_ptr<XLATensor>> raw_outputs;
 
+  const auto result_shape = client_->GetShape(*result_dh).ValueOrDie();
   // if return value is a tuple,
-  if (xla::ShapeUtil::IsTuple(result_literal->shape())) {
-    const std::vector<xla::Literal> tuple_elements =
-        result_literal->DecomposeTuple();
-    for (const auto& tuple_element : tuple_elements) {
-      raw_outputs.push_back(std::make_shared<XLATensor>(tuple_element));
+  if (xla::ShapeUtil::IsTuple(result_shape)) {
+    auto tuple_elements = client_->DeconstructTuple(*result_dh).ValueOrDie();
+    for (auto& tuple_element : tuple_elements) {
+      raw_outputs.push_back(
+          std::make_shared<XLATensor>(std::move(tuple_element)));
     }
   } else {
-    raw_outputs.push_back(std::make_shared<XLATensor>(*result_literal));
+    raw_outputs.push_back(std::make_shared<XLATensor>(std::move(result_dh)));
   }
 
   // filter out real outputs from backward-captured outputs
@@ -231,19 +229,20 @@ void XlaModule::backward(
   }
 
   auto client_ = XlaGetClient();
-  auto result_literal = client_->ExecuteComputationAndTransfer(
-      backward_graph_, raw_grad_outputs_data);
+  auto result_dh =
+      client_->ExecuteComputation(backward_graph_, raw_grad_outputs_data);
 
-  // convert tuple literals into vector of XLATensor
+  // convert tuples into vector of XLATensor
+  const auto result_shape = client_->GetShape(*result_dh).ValueOrDie();
   std::vector<std::shared_ptr<XLATensor>> grad_inputs;
-  if (xla::ShapeUtil::IsTuple(result_literal->shape())) {
-    const std::vector<xla::Literal> tuple_elements =
-        result_literal->DecomposeTuple();
-    for (const auto& tuple_element : tuple_elements) {
-      grad_inputs.push_back(std::make_shared<XLATensor>(tuple_element));
+  if (xla::ShapeUtil::IsTuple(result_shape)) {
+    auto tuple_elements = client_->DeconstructTuple(*result_dh).ValueOrDie();
+    for (auto& tuple_element : tuple_elements) {
+      grad_inputs.push_back(
+          std::make_shared<XLATensor>(std::move(tuple_element)));
     }
   } else {
-    grad_inputs.push_back(std::make_shared<XLATensor>(*result_literal));
+    grad_inputs.push_back(std::make_shared<XLATensor>(std::move(result_dh)));
   }
 
   JIT_ASSERT((inputs_.size() + params_.size()) == grad_inputs.size());
