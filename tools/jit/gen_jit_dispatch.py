@@ -330,7 +330,7 @@ def signature(decl):
     args = []
     kwarg_only = False
     for a in decl['arguments']:
-        if decl['name'] != 'expand' and not kwarg_only and a.get('kwarg_only'):
+        if not kwarg_only and a.get('kwarg_only'):
             args.append('*')
             kwarg_only = True
         args.append(format_arg(a))

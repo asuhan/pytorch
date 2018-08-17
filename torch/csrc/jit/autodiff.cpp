@@ -22,6 +22,65 @@ void wrapDim(int64_t & dim, const std::vector<int64_t> & sizes) {
   }
 }
 
+namespace {
+
+at::optional<int64_t> int_attr_maybe(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      JIT_ASSERT(output->type()->kind() == TypeKind::IntType);
+      return node->i(attr::value);
+    }
+  }
+  return at::nullopt;
+}
+
+int64_t int_attr(const Node* parent, const size_t id) {
+  const auto attr_opt = int_attr_maybe(parent, id);
+  JIT_ASSERTM(attr_opt, "Constant with id ", id, " not found.");
+  return *attr_opt;
+}
+
+at::optional<std::vector<int64_t>> int_list_attr_maybe(const Node* parent, const Symbol& attr) {
+  const auto id = parent->namedInput(attr)->unique();
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  std::vector<int64_t> result;
+  for (const auto node : nodes) {
+    if (node->kind() != prim::ListConstruct && node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() != id) {
+      continue;
+    }
+    if (node->kind() == prim::Constant) {
+      JIT_ASSERT(output->type()->kind() == TypeKind::ListType);
+      JIT_ASSERT(output->type()->expect<ListType>()->getElementType()->kind() == TypeKind::IntType);
+      return node->is(attr::value);
+    }
+    const auto node_inputs = node->inputs();
+    for (const auto input : node_inputs) {
+      const auto elem_maybe = int_attr_maybe(node, input->unique());
+      if (!elem_maybe) {
+        return at::nullopt;
+      }
+      result.push_back(*elem_maybe);
+    }
+    return result;
+  }
+  return at::nullopt;
+}
+
+}  // namespace
+
 bool isDifferentiable(Node * n) {
   static OperatorSet differentiable_ops = {
     "aten::add(Tensor self, Tensor other, *, Scalar alpha) -> Tensor",
@@ -74,8 +133,8 @@ bool isDifferentiable(Node * n) {
   if (n->matches("aten::squeeze(Tensor self, int dim) -> Tensor")) {
     return n->namedInput(attr::self)->type()->cast<TensorType>() && n->is_constant(attr::dim);
   }
-  if (n->matches("aten::expand(Tensor self, int[] size, int implicit) -> Tensor")) {
-    return true;  // TODO(asuhan)
+  if (n->matches("aten::expand(Tensor self, int[] size, *, int implicit) -> Tensor")) {
+    return int_list_attr_maybe(n, attr::size) && n->is_constant(attr::implicit);
   }
   if (n->matches("aten::view(Tensor self, int[] size) -> Tensor") ||
       n->matches("aten::reshape(Tensor self, int[] shape) -> Tensor")) {
@@ -120,57 +179,17 @@ bool outputRequiresGrad(Node* node, std::function<bool(Value*)> requires_grad) {
   }
 }
 
-namespace {
-
-int64_t int_attr(const Node* parent, const size_t id) {
-  const auto nodes = parent->owningGraph()->block()->nodes();
-  for (const auto node : nodes) {
-    if (node->kind() != prim::Constant) {
-      continue;
-    }
-    const auto node_outputs = node->outputs();
-    JIT_ASSERT(node_outputs.size() == 1);
-    const auto output = node_outputs[0];
-    if (output->unique() == id) {
-      JIT_ASSERT(output->type()->kind() == TypeKind::IntType);
-      return node->i(attr::value);
-    }
-  }
-  JIT_ASSERTM(false, "Constant with id ", id, " not found.");
-}
-
-}  // namespace
-
 int64_t int_attr(const Node* parent, const Symbol& attr) {
   return int_attr(parent, parent->namedInput(attr)->unique());
 }
 
 std::vector<int64_t> int_list_attr(const Node* parent, const Symbol& attr) {
-  const auto id = parent->namedInput(attr)->unique();
-  const auto nodes = parent->owningGraph()->block()->nodes();
-  std::vector<int64_t> result;
-  for (const auto node : nodes) {
-    if (node->kind() != prim::ListConstruct && node->kind() != prim::Constant) {
-      continue;
-    }
-    const auto node_outputs = node->outputs();
-    JIT_ASSERT(node_outputs.size() == 1);
-    const auto output = node_outputs[0];
-    if (output->unique() != id) {
-      continue;
-    }
-    if (node->kind() == prim::Constant) {
-      JIT_ASSERT(output->type()->kind() == TypeKind::ListType);
-      JIT_ASSERT(output->type()->expect<ListType>()->getElementType()->kind() == TypeKind::IntType);
-      return node->is(attr::value);
-    }
-    const auto node_inputs = node->inputs();
-    for (const auto input : node_inputs) {
-      result.push_back(int_attr(node, input->unique()));
-    }
-    return result;
+  const auto attr_opt = int_list_attr_maybe(parent, attr);
+  if (!attr_opt) {
+    const auto id = parent->namedInput(attr)->unique();
+    JIT_ASSERTM(attr_opt, "Constant with id ", id, " not found.");
   }
-  JIT_ASSERTM(false, "Constant with id ", id, " not found.");
+  return *attr_opt;
 }
 
 float float_attr(const Node* parent, const Symbol& attr) {
@@ -284,7 +303,7 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       }
       return {dmat1, dmat2};
 
-    } else if (node->matches("aten::expand(Tensor self, int[] size, int implicit) -> Tensor")) {
+    } else if (node->matches("aten::expand(Tensor self, int[] size, *, int implicit) -> Tensor")) {
       const auto& input_sizes = inputs.at(0).sizes();
       if (input_sizes.size() == 0)
         return {grads.at(0).sum(), nullptr, nullptr};
