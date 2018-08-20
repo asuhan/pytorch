@@ -1128,30 +1128,45 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
   xla::XlaBuilder b("xla_computation");
   std::unordered_map<size_t, xla::XlaOp> node_xla_ops;
   std::unordered_set<size_t> undefined_inputs;
+  std::unordered_set<size_t> all_zero_inputs;
 
   auto nodes = graph_->block()->nodes();
   const auto graph_inputs = graph_->inputs();
-  for (size_t parameter_number = 0; parameter_number < graph_inputs.size();
+  for (size_t parameter_number = 0, xla_parameter_number = 0;
+       parameter_number < graph_inputs.size();
        ++parameter_number) {
     Value* graph_input = graph_inputs[parameter_number];
+    if (parameter_shapes[parameter_number].element_type() ==
+        xla::PrimitiveType::PRIMITIVE_TYPE_INVALID) {
+      all_zero_inputs.emplace(graph_input->unique());
+      continue;
+    }
     const auto it_ok = node_xla_ops.emplace(
         graph_input->unique(),
         b.Parameter(
-            parameter_number,
+            xla_parameter_number,
             parameter_shapes[parameter_number],
-            "parameter_" + std::to_string(parameter_number)));
+            "parameter_" + std::to_string(xla_parameter_number)));
     CHECK(it_ok.second);
+    ++xla_parameter_number;
   }
   for (auto node : nodes) {
     switch (node->kind()) {
       case aten::add:
       case aten::mul: {
-        if (node->inputs().size() < 2) {
+        const auto node_inputs = node->inputs();
+        if (node_inputs.size() < 2) {
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        xla::XlaOp xla_output =
-            build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
+        xla::XlaOp xla_output;
+        if (all_zero_inputs.find(node_inputs[0]->unique()) !=
+            all_zero_inputs.end()) {
+          CHECK(node->kind() == aten::add);
+          xla_output = *XLA_OP(1);
+        } else {
+          xla_output = build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
+        }
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);

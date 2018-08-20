@@ -129,7 +129,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
   if (!forward_graph_initialized) {
     std::vector<xla::Shape> forward_shapes;
     for (auto p : inputs_params_buffers) {
-      forward_shapes.push_back(p.get()->shape());
+      forward_shapes.push_back(p->shape());
     }
 
     XlaCodeImpl xla_fwd_impl(f_);
@@ -142,7 +142,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
 
   std::vector<xla::GlobalData*> inputs_params_buffers_data;
   for (auto p : inputs_params_buffers) {
-    inputs_params_buffers_data.push_back(p.get()->xlaData());
+    inputs_params_buffers_data.push_back(p->xlaData());
   }
   auto result_dh =
       client_->ExecuteComputation(forward_graph_, inputs_params_buffers_data);
@@ -194,13 +194,7 @@ void XlaModule::backward(
 
   for (auto p : captured_outputs_) {
     // dummy all zeros grad outputs for captured_outputs
-    auto shape = p->shape();
-    std::vector<int64_t> dims;
-    for (const auto d : shape.dimensions()) {
-      dims.push_back(d);
-    }
-    raw_grad_outputs.push_back(
-        std::make_shared<XLATensor>(autograd::make_variable(at::zeros(dims))));
+    raw_grad_outputs.push_back(nullptr);
   }
 
   for (auto p : captured_inputs_outputs_) {
@@ -211,7 +205,11 @@ void XlaModule::backward(
   if (!backward_graph_initialized) {
     std::vector<xla::Shape> backward_shapes;
     for (auto p : raw_grad_outputs) {
-      backward_shapes.push_back(p.get()->shape());
+      if (p) {
+        backward_shapes.push_back(p->shape());
+      } else {
+        backward_shapes.emplace_back();
+      }
     }
 
     XlaCodeImpl xla_bwd_impl(df_);
@@ -224,7 +222,10 @@ void XlaModule::backward(
 
   std::vector<xla::GlobalData*> raw_grad_outputs_data;
   for (auto p : raw_grad_outputs) {
-    xla::GlobalData* ptr = p.get()->xlaData();
+    if (!p) {
+      continue;
+    }
+    xla::GlobalData* ptr = p->xlaData();
     raw_grad_outputs_data.push_back(ptr);
   }
 
