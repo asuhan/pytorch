@@ -501,14 +501,14 @@ class TestOptimizer(TestCase):
         self.assertEqual(x.add_(2, y).mul_(y), xla_x.add_(2, xla_y).mul_(xla_y).to_tensor())
         self.assertEqual(x.add_(y).mul_(y), xla_x.add_(xla_y).mul_(xla_y).to_tensor())
 
-    def checkSgd(self, lr, momentum, nsteps, do_zero_grad):
+    def checkSgd(self, lr, momentum, weight_decay, nsteps, do_zero_grad):
         input = torch.randn(4, 4, requires_grad=True)
         input_xla = torch._C.XLATensor(input)
         model = nn.Linear(4, 20)
         traced_model = torch.jit.trace(input)(model)
         xla_model = torch._C.XlaModule(traced_model, [input])
-        xla_optimizer = optim.SGD(xla_model.parameters(), lr=lr, momentum=momentum)
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
+        xla_optimizer = optim.SGD(xla_model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
         xla_model(input_xla)
         output = model(input)
         grad_output = torch.randn(*output.shape) # random gradients
@@ -526,10 +526,11 @@ class TestOptimizer(TestCase):
             self.assertEqual(xla_updated_params, updated_params);
 
     def test_sgd(self):
-        self.checkSgd(lr=0.1, momentum=0, nsteps=1, do_zero_grad=True)
-        self.checkSgd(lr=0.1, momentum=0, nsteps=2, do_zero_grad=False)
-        self.checkSgd(lr=0.1, momentum=0.5, nsteps=1, do_zero_grad=True)
-        self.checkSgd(lr=0.1, momentum=0.5, nsteps=2, do_zero_grad=False)
+        for weight_decay in [0, 5e-4]:
+            self.checkSgd(lr=0.1, momentum=0, weight_decay=weight_decay, nsteps=1, do_zero_grad=True)
+            self.checkSgd(lr=0.1, momentum=0, weight_decay=weight_decay, nsteps=2, do_zero_grad=False)
+            self.checkSgd(lr=0.1, momentum=0.5, weight_decay=weight_decay, nsteps=1, do_zero_grad=True)
+            self.checkSgd(lr=0.1, momentum=0.5, weight_decay=weight_decay, nsteps=2, do_zero_grad=False)
 
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
