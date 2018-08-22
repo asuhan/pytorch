@@ -38,20 +38,22 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
 
   virtual void zero_();
 
-  // Applies the queue of operations in preparation for using the data.
-  virtual void applyOps();
-
   virtual void detach_();
 
   // Applies the queue of operations for a list of tensors.
   static void applyOpsMulti(
       const std::vector<std::shared_ptr<XLATensor>>& tensors);
 
- protected:
+ private:
   XLATensor() : requires_grad_(false) {}
+
+  // Applies the queue of operations in preparation for using the data.
+  virtual void applyOps();
 
   std::shared_ptr<XLATensorData> data_;
   bool requires_grad_;
+
+  friend class XLATensorData;
 };
 
 class XLATensorData : public XLATensor {
