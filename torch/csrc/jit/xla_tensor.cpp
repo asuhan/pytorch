@@ -247,6 +247,31 @@ void XLATensor::mulAddMulti(
   auto client = XlaGetClient();
   auto result_tuple = client->ExecuteComputation(computation, input_data);
   auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
+  setMultiFromResult(dest_tuple, new_dest_elements);
+}
+
+void XLATensor::zeroMulti(
+    const std::vector<std::shared_ptr<XLATensor>>& dest_tuple) {
+  applyOpsMulti(dest_tuple);
+  xla::XlaBuilder b("zeroMulti");
+  std::vector<xla::XlaOp> new_dest_tuple;
+  for (auto& dest : dest_tuple) {
+    const auto dest_shape = dest->shape();
+    const auto zero =
+        b.ConstantLiteral(xla::Literal::Zero(dest_shape.element_type()));
+    new_dest_tuple.push_back(b.Broadcast(zero, xla_shape_sizes(dest_shape)));
+  }
+  b.Tuple(new_dest_tuple);
+  auto computation = b.Build().ValueOrDie();
+  auto client = XlaGetClient();
+  auto result_tuple = client->ExecuteComputation(computation, {});
+  auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
+  setMultiFromResult(dest_tuple, new_dest_elements);
+}
+
+void XLATensor::setMultiFromResult(
+    const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
+    std::vector<std::unique_ptr<xla::GlobalData>>& new_dest_elements) {
   CHECK_EQ(new_dest_elements.size(), dest_tuple.size());
   for (size_t i = 0; i < dest_tuple.size(); ++i) {
     auto dest_tensor_data =

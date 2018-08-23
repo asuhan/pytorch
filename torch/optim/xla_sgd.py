@@ -34,6 +34,16 @@ class XlaSGD(SGD):
                  weight_decay=0, nesterov=False):
         super(XlaSGD, self).__init__(params, lr, momentum, dampening, weight_decay, nesterov)
 
+    def zero_grad(self):
+        r"""Clears the gradients of all optimized :class:`torch.Tensor` s."""
+        grads = []
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    p.grad.detach_()
+                    grads.append(p.grad)
+        torch._C._xla_multi_zero(grads)
+
     def step(self, closure=None):
         """Performs a single optimization step.
 

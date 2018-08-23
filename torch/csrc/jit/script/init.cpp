@@ -633,6 +633,10 @@ void initJitScriptBindings(PyObject* module) {
     XLATensor::mulAddMulti(scale_dest, dest_tuple, alpha, source_tuple);
     return;
   });
+  m.def("_xla_multi_zero", [](const std::vector<std::shared_ptr<XLATensor>>& dest_tuple) {
+    XLATensor::zeroMulti(dest_tuple);
+    return;
+  });
 #endif  // WITH_XLA
 
 }

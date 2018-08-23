@@ -51,11 +51,18 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
       const double alpha,
       const std::vector<std::shared_ptr<XLATensor>>& source_tuple);
 
+  static void zeroMulti(
+      const std::vector<std::shared_ptr<XLATensor>>& dest_tuple);
+
  private:
   XLATensor() : requires_grad_(false) {}
 
   // Applies the queue of operations in preparation for using the data.
   virtual void applyOps();
+
+  static void setMultiFromResult(
+      const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
+      std::vector<std::unique_ptr<xla::GlobalData>>& new_dest_elements);
 
   std::shared_ptr<XLATensorData> data_;
   bool requires_grad_;
