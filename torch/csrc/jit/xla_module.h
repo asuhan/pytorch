@@ -46,6 +46,9 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   std::vector<std::shared_ptr<XLATensor>> inputs_;
   std::vector<std::shared_ptr<XLATensor>> captured_outputs_;
   std::vector<std::shared_ptr<XLATensor>> captured_inputs_outputs_;
+
+  std::vector<xla::Shape> forward_ret_shape_cache_;
+  std::vector<xla::Shape> backward_ret_shape_cache_;
 };
 
 } // namespace jit
