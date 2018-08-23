@@ -507,7 +507,7 @@ class TestOptimizer(TestCase):
         model = nn.Linear(4, 20)
         traced_model = torch.jit.trace(input)(model)
         xla_model = torch._C.XlaModule(traced_model, [input])
-        xla_optimizer = optim.SGD(xla_model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+        xla_optimizer = optim.XlaSGD(xla_model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
         optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
         xla_model(input_xla)
         output = model(input)

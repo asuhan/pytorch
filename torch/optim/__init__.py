@@ -12,6 +12,7 @@ from .sparse_adam import SparseAdam
 from .adamax import Adamax
 from .asgd import ASGD
 from .sgd import SGD
+from .xla_sgd import XlaSGD
 from .rprop import Rprop
 from .rmsprop import RMSprop
 from .optimizer import Optimizer
