@@ -31,7 +31,7 @@ XlaModule::XlaModule(
     script::Module& module,
     std::vector<autograd::Variable>& inputs,
     bool backward)
-    : forward_graph_initialized(false), backward_graph_initialized(false) {
+    : forward_graph_initialized_(false), backward_graph_initialized_(false) {
   const auto forward = module.find_method("forward");
   JIT_ASSERT(forward);
 
@@ -126,7 +126,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
   }
 
   // Lazy-convert forward graph to XlaComputation
-  if (!forward_graph_initialized) {
+  if (!forward_graph_initialized_) {
     std::vector<xla::Shape> forward_shapes;
     for (auto p : inputs_params_buffers) {
       forward_shapes.push_back(p->shape());
@@ -138,6 +138,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
       AT_ERROR("Failed to build XlaComputation");
     }
     forward_graph_ = std::move(*maybe_computation);
+    forward_graph_initialized_ = true;
   }
 
   std::vector<xla::GlobalData*> inputs_params_buffers_data;
@@ -202,7 +203,7 @@ void XlaModule::backward(
   }
 
   // if backward graph is not compiled, compile it
-  if (!backward_graph_initialized) {
+  if (!backward_graph_initialized_) {
     std::vector<xla::Shape> backward_shapes;
     for (auto p : raw_grad_outputs) {
       if (p) {
@@ -218,6 +219,7 @@ void XlaModule::backward(
       AT_ERROR("Failed to build backward XlaComputation");
     }
     backward_graph_ = std::move(*maybe_computation);
+    backward_graph_initialized_ = true;
   }
 
   std::vector<xla::GlobalData*> raw_grad_outputs_data;
