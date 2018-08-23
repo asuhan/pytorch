@@ -626,6 +626,13 @@ void initJitScriptBindings(PyObject* module) {
     .def("parameters_buffers", [](XlaModule& xla_module) {
 	return xla_module.parameters_buffers();
       });
+  m.def("_xla_multi_mul_add", [](const double scale_dest,
+                                 const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
+                                 const double alpha,
+                                 const std::vector<std::shared_ptr<XLATensor>>& source_tuple) {
+    XLATensor::mulAddMulti(scale_dest, dest_tuple, alpha, source_tuple);
+    return;
+  });
 #endif  // WITH_XLA
 
 }

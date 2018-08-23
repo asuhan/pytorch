@@ -10,26 +10,23 @@ def _zeros_like(p):
 
 def _apply_weight_decay(d_p_multi, p_multi, weight_decay):
     assert len(d_p_multi) == len(p_multi)
-    for i in range(0, len(d_p_multi)):
-        d_p_multi[i].add_(weight_decay, p_multi[i].data)
+    torch._C._xla_multi_mul_add(1, d_p_multi, weight_decay, p_multi)
 
 def _apply_momentum(buf_multi, d_p_multi, is_first, momentum, nesterov, dampening):
     assert len(d_p_multi) == len(buf_multi) == len(is_first)
-    for i in range(0, len(d_p_multi)):
-        if is_first[i]:
-            buf_multi[i].mul_(momentum).add_(d_p_multi[i])
-        else:
-            buf_multi[i].mul_(momentum).add_(1 - dampening, d_p_multi[i])
+    assert len(set(is_first)) == 1
+    if is_first[0]:
+        torch._C._xla_multi_mul_add(momentum, buf_multi, 1, d_p_multi)
+    else:
+        torch._C._xla_multi_mul_add(momentum, buf_multi, 1 - dampening, d_p_multi)
 
 def _apply_lr(p_multi, d_p_multi, lr):
     assert len(d_p_multi) == len(p_multi)
-    for i in range(0, len(d_p_multi)):
-        p_multi[i].data.add_(-lr, d_p_multi[i])
+    torch._C._xla_multi_mul_add(1, p_multi, -lr, d_p_multi)
 
 def _apply_nesterov(d_p_multi, buf_multi, momentum):
     assert len(d_p_multi) == len(buf_multi)
-    for i in range(0, len(d_p_multi)):
-        d_p_multi[i].add_(momentum, buf_multi[i])
+    torch._C._xla_multi_mul_add(1, d_p_multi, momentum, buf_multi)
 
 class XlaSGD(SGD):
 

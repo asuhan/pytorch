@@ -197,6 +197,68 @@ void XLATensor::applyOpsMulti(
   }
 }
 
+namespace {
+
+// TODO(asuhan): de-dup with the version in xla_code_impl
+std::vector<int64> xla_shape_sizes(const xla::Shape& shape) {
+  std::vector<int64> shape_sizes(
+      shape.dimensions().begin(), shape.dimensions().end());
+  return shape_sizes;
+}
+
+} // namespace
+
+void XLATensor::mulAddMulti(
+    const double scale_dest,
+    const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
+    const double alpha,
+    const std::vector<std::shared_ptr<XLATensor>>& source_tuple) {
+  CHECK_EQ(dest_tuple.size(), source_tuple.size());
+  applyOpsMulti(dest_tuple);
+  applyOpsMulti(source_tuple);
+  std::vector<xla::XlaOp> new_dest_tuple;
+  std::vector<xla::GlobalData*> input_data;
+  xla::XlaBuilder b("mulAddMulti");
+  for (size_t i = 0; i < dest_tuple.size(); ++i) {
+    auto old_dest =
+        b.Parameter(2 * i, dest_tuple[i]->shape(), "dest_" + std::to_string(i));
+    auto source = b.Parameter(
+        2 * i + 1, source_tuple[i]->shape(), "source_" + std::to_string(i));
+    if (alpha != 1) {
+      const auto alpha_literal = xla::Literal::CreateR0<float>(alpha);
+      const auto alpha_xla = b.ConstantLiteral(*alpha_literal);
+      const auto alpha_source =
+          b.Broadcast(alpha_xla, xla_shape_sizes(source_tuple[i]->shape()));
+      source = b.Mul(source, alpha_source);
+    }
+    if (scale_dest != 1) {
+      const auto scale_dest_literal = xla::Literal::CreateR0<float>(scale_dest);
+      const auto scale_dest_xla = b.ConstantLiteral(*scale_dest_literal);
+      const auto scale_dest_broadcast =
+          b.Broadcast(scale_dest_xla, xla_shape_sizes(dest_tuple[i]->shape()));
+      old_dest = b.Mul(old_dest, scale_dest_broadcast);
+    }
+    new_dest_tuple.push_back(b.Add(old_dest, source));
+    input_data.push_back(dest_tuple[i]->xlaData());
+    input_data.push_back(source_tuple[i]->xlaData());
+  }
+  b.Tuple(new_dest_tuple);
+  auto computation = b.Build().ValueOrDie();
+  auto client = XlaGetClient();
+  auto result_tuple = client->ExecuteComputation(computation, input_data);
+  auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
+  CHECK_EQ(new_dest_elements.size(), dest_tuple.size());
+  for (size_t i = 0; i < dest_tuple.size(); ++i) {
+    auto dest_tensor_data =
+        std::dynamic_pointer_cast<XLATensorData>(dest_tuple[i]);
+    if (dest_tensor_data) {
+      dest_tensor_data->xla_data_ = std::move(new_dest_elements[i]);
+    } else {
+      dest_tuple[i]->data()->xla_data_ = std::move(new_dest_elements[i]);
+    }
+  }
+}
+
 XLATensorData::XLATensorData(const autograd::Variable& tensor)
     : grad_(nullptr), b_("XLATensor") {
   auto client_ = XlaGetClient();
@@ -242,17 +304,6 @@ at::Tensor XLATensorData::toTensor() {
   auto return_tensor = make_tensor_from_xla_literal(*result_literal);
   return autograd::make_variable(return_tensor, false);
 }
-
-namespace {
-
-// TODO(asuhan): de-dup with the version in xla_code_impl
-std::vector<int64> xla_shape_sizes(const xla::Shape& shape) {
-  std::vector<int64> shape_sizes(
-      shape.dimensions().begin(), shape.dimensions().end());
-  return shape_sizes;
-}
-
-} // namespace
 
 void XLATensorData::add_(XLATensor& other, const at::Scalar& alpha) {
   other.applyOps();

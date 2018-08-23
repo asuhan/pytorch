@@ -44,6 +44,13 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
   static void applyOpsMulti(
       const std::vector<std::shared_ptr<XLATensor>>& tensors);
 
+  // In place scale and add for multiple tensors.
+  static void mulAddMulti(
+      const double scale_dest,
+      const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
+      const double alpha,
+      const std::vector<std::shared_ptr<XLATensor>>& source_tuple);
+
  private:
   XLATensor() : requires_grad_(false) {}
 
@@ -91,6 +98,8 @@ class XLATensorData : public XLATensor {
   at::optional<xla::XlaOp> operations_;
   xla::XlaBuilder b_;
   std::vector<xla::GlobalData*> operations_params_;
+
+  friend class XLATensor;
 };
 
 } // namespace jit
