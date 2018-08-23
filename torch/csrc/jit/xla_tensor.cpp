@@ -138,6 +138,12 @@ XLATensor::XLATensor(const autograd::Variable& tensor)
 XLATensor::XLATensor(std::unique_ptr<xla::GlobalData> xla_data)
     : data_(new XLATensorData(std::move(xla_data))), requires_grad_(false) {}
 
+XLATensor::XLATensor(
+    std::unique_ptr<xla::GlobalData> xla_data,
+    const xla::Shape& shape)
+    : data_(new XLATensorData(std::move(xla_data), shape)),
+      requires_grad_(false) {}
+
 at::Tensor XLATensor::toTensor() {
   const auto t = data_->toTensor();
   const auto v = static_cast<const autograd::Variable&>(t);
@@ -298,6 +304,14 @@ XLATensorData::XLATensorData(std::unique_ptr<xla::GlobalData> xla_data)
   shape_ = client_->GetShape(*xla_data_).ValueOrDie();
   dtype_ = shape_.element_type();
 }
+
+XLATensorData::XLATensorData(
+    std::unique_ptr<xla::GlobalData> xla_data,
+    const xla::Shape& shape)
+    : xla_data_(std::move(xla_data)),
+      shape_(shape),
+      dtype_(shape.element_type()),
+      b_("XLATensor") {}
 
 std::shared_ptr<XLATensor> XLATensorData::grad() const {
   return grad_;

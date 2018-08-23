@@ -16,6 +16,7 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensor);
   XLATensor(const autograd::Variable&);
   XLATensor(std::unique_ptr<xla::GlobalData>);
+  XLATensor(std::unique_ptr<xla::GlobalData>, const xla::Shape& shape);
 
   virtual at::Tensor toTensor();
 
@@ -75,6 +76,7 @@ class XLATensorData : public XLATensor {
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensorData);
   XLATensorData(const autograd::Variable&);
   XLATensorData(std::unique_ptr<xla::GlobalData>);
+  XLATensorData(std::unique_ptr<xla::GlobalData>, const xla::Shape& shape);
 
   at::Tensor toTensor() override;
 
