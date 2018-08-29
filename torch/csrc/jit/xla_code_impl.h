@@ -9,9 +9,11 @@
 namespace torch {
 namespace jit {
 
-struct XlaExecutionStatus {
-  size_t pc_delta;
-  bool ok;
+using int64 = long long;
+
+struct XlaComputationResult {
+  xla::XlaComputation computation;
+  std::vector<std::vector<int64>> ret_logical_shapes;
 };
 
 class XlaCodeImpl {
@@ -21,8 +23,9 @@ class XlaCodeImpl {
   at::optional<std::vector<xla::Shape>> captureInputShapes(
       const std::vector<at::Tensor>& inputs) const;
 
-  at::optional<xla::XlaComputation> buildXlaComputation(
-      const std::vector<xla::Shape>& parameter_shapes) const;
+  at::optional<XlaComputationResult> buildXlaComputation(
+      const std::vector<xla::Shape>& parameter_shapes,
+      const std::vector<std::vector<int64>>& logical_parameter_shapes) const;
 
   std::shared_ptr<Graph> graph_;
 };

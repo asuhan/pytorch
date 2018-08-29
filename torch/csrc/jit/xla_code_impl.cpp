@@ -382,16 +382,14 @@ xla::XlaOp build_thnn_conv2d_backward_weight(
 
   const auto padded_input = b->Pad(input, xla_zero, padding_config);
 
-  return b->Transpose(
-      b->ConvGeneralDilated(
-          padded_input,
-          grad,
-          window_strides,
-          padding,
-          /*lhs_dilation=*/ones,
-          rhs_dilation,
-          dnums),
-      {3, 2, 0, 1});
+  return b->ConvGeneralDilated(
+      padded_input,
+      grad,
+      window_strides,
+      padding,
+      /*lhs_dilation=*/ones,
+      rhs_dilation,
+      dnums);
 }
 
 struct Conv2DGrads {
@@ -950,9 +948,36 @@ std::vector<const Value*> input_list_attr(const Node* parent, const size_t id) {
   CHECK(false) << "Constant with id " << id << " not found.";
 }
 
+class XlaNode {
+ public:
+  XlaNode(xla::XlaOp op) : op_(op) {}
+
+  XlaNode(xla::XlaOp op, const std::vector<int64>& logical_shape)
+      : op_(op), logical_shape_(logical_shape) {}
+
+  xla::XlaOp op(xla::XlaBuilder* b) const {
+    if (logical_shape_.empty()) {
+      return op_;
+    }
+    return b->Reshape(op_, logical_shape_);
+  }
+
+  xla::XlaOp opNoPerm() const {
+    return op_;
+  }
+
+  const std::vector<int64>& logicalShape() const {
+    return logical_shape_;
+  }
+
+ private:
+  xla::XlaOp op_;
+  std::vector<int64> logical_shape_;
+};
+
 at::optional<xla::XlaOp> build_stack(
     const Node* node,
-    const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
+    const std::unordered_map<size_t, XlaNode>& node_xla_ops,
     const std::unordered_set<size_t>& undefined_inputs,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
@@ -972,7 +997,7 @@ at::optional<xla::XlaOp> build_stack(
     const auto xla_op_it = node_xla_ops.find(stack_input->unique());
     CHECK(xla_op_it != node_xla_ops.end());
     reshaped_inputs.push_back(
-        b->Reshape(xla_op_it->second, reshaped_input_size));
+        b->Reshape(xla_op_it->second.op(b), reshaped_input_size));
   }
   return b->ConcatInDim(reshaped_inputs, dim);
 }
@@ -1087,11 +1112,12 @@ at::optional<xla::XlaOp> build_sum(
       xla_i64_list(int_list_attr(node, attr::dim)));
 }
 
-at::optional<const xla::XlaOp&> xla_op_for_input(
+at::optional<xla::XlaOp> xla_op_for_input(
     const Node* node,
     const size_t input_index,
-    const std::unordered_map<size_t, xla::XlaOp>& node_xla_ops,
-    const std::unordered_set<size_t> undefined_inputs) {
+    const std::unordered_map<size_t, XlaNode>& node_xla_ops,
+    const std::unordered_set<size_t> undefined_inputs,
+    xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
   const auto input = node_inputs.at(input_index);
 
@@ -1104,7 +1130,7 @@ at::optional<const xla::XlaOp&> xla_op_for_input(
   // check in constructed xla ops
   const auto xla_op_it = node_xla_ops.find(input->unique());
   CHECK(xla_op_it != node_xla_ops.end());
-  return xla_op_it->second;
+  return xla_op_it->second.op(b);
 }
 
 size_t output_id(const Node* node) {
@@ -1118,20 +1144,45 @@ void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
   b->GetTupleElement(b->Tuple({ret}), 0);
 }
 
+XlaNode to_rank1(
+    const xla::XlaOp op,
+    const std::vector<int64>& permutation,
+    xla::XlaBuilder* b) {
+  const auto op_shape = b->GetShape(op).ValueOrDie();
+  if (!permutation.empty()) {
+    CHECK_EQ(op_shape.dimensions_size(), permutation.size());
+  }
+  const auto op_elems = std::accumulate(
+      op_shape.dimensions().begin(),
+      op_shape.dimensions().end(),
+      1,
+      [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
+  if (permutation.empty()) {
+    return {b->Reshape(op, {op_elems}), {}};
+  }
+  std::vector<int64> logical_size(op_shape.dimensions_size());
+  for (size_t i = 0; i < op_shape.dimensions_size(); ++i) {
+    logical_size[i] = op_shape.dimensions(permutation[i]);
+  }
+  return {b->Reshape(op, permutation, {op_elems}), logical_size};
+}
+
 } // namespace
 
 #define XLA_OP(input_index) \
-  xla_op_for_input(node, input_index, node_xla_ops, undefined_inputs)
+  xla_op_for_input(node, input_index, node_xla_ops, undefined_inputs, &b)
 
-at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
-    const std::vector<xla::Shape>& parameter_shapes) const {
+at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
+    const std::vector<xla::Shape>& parameter_shapes,
+    const std::vector<std::vector<int64>>& logical_parameter_shapes) const {
   xla::XlaBuilder b("xla_computation");
-  std::unordered_map<size_t, xla::XlaOp> node_xla_ops;
+  std::unordered_map<size_t, XlaNode> node_xla_ops;
   std::unordered_set<size_t> undefined_inputs;
   std::unordered_set<size_t> all_zero_inputs;
 
   auto nodes = graph_->block()->nodes();
   const auto graph_inputs = graph_->inputs();
+  CHECK_EQ(parameter_shapes.size(), logical_parameter_shapes.size());
   for (size_t parameter_number = 0, xla_parameter_number = 0;
        parameter_number < graph_inputs.size();
        ++parameter_number) {
@@ -1141,12 +1192,15 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       all_zero_inputs.emplace(graph_input->unique());
       continue;
     }
-    const auto it_ok = node_xla_ops.emplace(
-        graph_input->unique(),
-        b.Parameter(
-            xla_parameter_number,
-            parameter_shapes[parameter_number],
-            "parameter_" + std::to_string(xla_parameter_number)));
+    auto parameter = b.Parameter(
+        xla_parameter_number,
+        parameter_shapes[parameter_number],
+        "parameter_" + std::to_string(xla_parameter_number));
+    if (!logical_parameter_shapes[parameter_number].empty()) {
+      parameter =
+          b.Reshape(parameter, logical_parameter_shapes[parameter_number]);
+    }
+    const auto it_ok = node_xla_ops.emplace(graph_input->unique(), parameter);
     CHECK(it_ok.second);
     ++xla_parameter_number;
   }
@@ -1225,8 +1279,11 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           CHECK(it_ok.second);
         }
         {
+          auto grad_weight = conv2d_grads.grad_weight;
+          std::vector<int64> permutation{3, 2, 0, 1};
+          const auto grad_weight_rank1 = to_rank1(grad_weight, permutation, &b);
           const auto it_ok = node_xla_ops.emplace(
-              node_outputs[1]->unique(), conv2d_grads.grad_weight);
+              node_outputs[1]->unique(), grad_weight_rank1);
           CHECK(it_ok.second);
         }
         {
@@ -1476,12 +1533,14 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     LOG(INFO) << "Unexpected end of graph";
     return at::nullopt;
   }
+  std::vector<std::vector<int64>> ret_logical_shapes;
   if (node_inputs.size() > 1) {
     std::vector<xla::XlaOp> returned_tuple;
     for (const auto return_input : node_inputs) {
       const auto it = node_xla_ops.find(return_input->unique());
       CHECK(it != node_xla_ops.end());
-      returned_tuple.push_back(it->second);
+      returned_tuple.push_back(it->second.opNoPerm());
+      ret_logical_shapes.push_back(it->second.logicalShape());
     }
     b.Tuple(returned_tuple);
   } else {
@@ -1489,9 +1548,10 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     CHECK(it != node_xla_ops.end());
     const auto ret = it->second;
     // Ensure that the returned value is the root of the computation.
-    activate_return_node(ret, &b);
+    activate_return_node(ret.opNoPerm(), &b);
+    ret_logical_shapes.push_back(ret.logicalShape());
   }
-  return b.Build().ValueOrDie();
+  return XlaComputationResult{b.Build().ValueOrDie(), ret_logical_shapes};
 }
 
 #undef XLA_OP

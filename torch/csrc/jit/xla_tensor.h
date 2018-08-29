@@ -9,13 +9,18 @@
 namespace torch {
 namespace jit {
 
+using int64 = long long;
+
 class XLATensorData;
 
 class XLATensor : public std::enable_shared_from_this<XLATensor> {
  public:
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensor);
   XLATensor(const autograd::Variable&);
-  XLATensor(std::unique_ptr<xla::GlobalData>, const xla::Shape& shape);
+  XLATensor(
+      std::unique_ptr<xla::GlobalData>,
+      const xla::Shape& shape,
+      const std::vector<int64>& logical_shape);
 
   virtual at::Tensor toTensor();
 
@@ -24,6 +29,8 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
   std::shared_ptr<XLATensorData> data() const;
 
   virtual void setGrad(std::shared_ptr<XLATensor> grad);
+
+  virtual const std::vector<int64>& logicalShape() const;
 
   virtual xla::Shape shape() const;
 
@@ -74,13 +81,16 @@ class XLATensorData : public XLATensor {
  public:
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensorData);
   XLATensorData(const autograd::Variable&);
-  XLATensorData(std::unique_ptr<xla::GlobalData>, const xla::Shape& shape);
+  XLATensorData(
+      std::unique_ptr<xla::GlobalData>,
+      const xla::Shape& shape,
+      const std::vector<int64>& logical_shape);
 
   at::Tensor toTensor() override;
 
   std::shared_ptr<XLATensor> grad() const override;
   void setGrad(std::shared_ptr<XLATensor> grad) override;
-
+  const std::vector<int64>& logicalShape() const override;
   xla::Shape shape() const override;
   xla::GlobalData* xlaData() const override;
 
@@ -98,6 +108,7 @@ class XLATensorData : public XLATensor {
 
   std::unique_ptr<xla::GlobalData> xla_data_;
   xla::Shape shape_;
+  std::vector<int64> logical_shape_;
   xla::PrimitiveType dtype_; // naming dtype for consistency with at::Tensor
   /* std::shared_ptr<xla::XlaComputation> grad_fn; */
   std::shared_ptr<XLATensor> grad_;

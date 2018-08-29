@@ -49,6 +49,8 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
 
   std::vector<xla::Shape> forward_ret_shape_cache_;
   std::vector<xla::Shape> backward_ret_shape_cache_;
+  std::vector<std::vector<int64>> forward_ret_logical_shapes_;
+  std::vector<std::vector<int64>> backward_ret_logical_shapes_;
 };
 
 } // namespace jit

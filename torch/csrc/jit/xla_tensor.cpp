@@ -137,8 +137,9 @@ XLATensor::XLATensor(const autograd::Variable& tensor)
 
 XLATensor::XLATensor(
     std::unique_ptr<xla::GlobalData> xla_data,
-    const xla::Shape& shape)
-    : data_(new XLATensorData(std::move(xla_data), shape)),
+    const xla::Shape& shape,
+    const std::vector<int64>& logical_shape)
+    : data_(new XLATensorData(std::move(xla_data), shape, logical_shape)),
       requires_grad_(false) {}
 
 at::Tensor XLATensor::toTensor() {
@@ -162,6 +163,11 @@ void XLATensor::setGrad(std::shared_ptr<XLATensor> grad) {
 xla::Shape XLATensor::shape() const {
   return data_->shape();
 }
+
+const std::vector<int64>& XLATensor::logicalShape() const {
+  return data_->logicalShape();
+}
+
 xla::GlobalData* XLATensor::xlaData() const {
   return data_->xlaData();
 }
@@ -223,25 +229,41 @@ void XLATensor::mulAddMulti(
   std::vector<xla::GlobalData*> input_data;
   xla::XlaBuilder b("mulAddMulti");
   for (size_t i = 0; i < dest_tuple.size(); ++i) {
-    auto old_dest =
-        b.Parameter(2 * i, dest_tuple[i]->shape(), "dest_" + std::to_string(i));
-    auto source = b.Parameter(
-        2 * i + 1, source_tuple[i]->shape(), "source_" + std::to_string(i));
+    const auto dest_shape = dest_tuple[i]->shape();
+    auto old_dest = b.Parameter(2 * i, dest_shape, "dest_" + std::to_string(i));
+    const auto source_shape = source_tuple[i]->shape();
+    auto source =
+        b.Parameter(2 * i + 1, source_shape, "source_" + std::to_string(i));
+    auto dest_sizes = xla_shape_sizes(dest_shape);
+    auto dim_sizes = dest_sizes;
+    if (source_tuple[i]->logicalShape().empty() !=
+        dest_tuple[i]->logicalShape().empty()) {
+      if (source_tuple[i]->logicalShape().empty()) {
+        CHECK_EQ(dest_tuple[i]->shape().dimensions_size(), 1);
+        source = b.Reshape(source, dim_sizes);
+      } else {
+        CHECK_EQ(source_shape.dimensions_size(), 1);
+        dim_sizes = xla_shape_sizes(source_shape);
+        old_dest = b.Reshape(old_dest, dim_sizes);
+      }
+    }
     if (alpha != 1) {
       const auto alpha_literal = xla::Literal::CreateR0<float>(alpha);
       const auto alpha_xla = b.ConstantLiteral(*alpha_literal);
-      const auto alpha_source =
-          b.Broadcast(alpha_xla, xla_shape_sizes(source_tuple[i]->shape()));
+      const auto alpha_source = b.Broadcast(alpha_xla, dim_sizes);
       source = b.Mul(source, alpha_source);
     }
     if (scale_dest != 1) {
       const auto scale_dest_literal = xla::Literal::CreateR0<float>(scale_dest);
       const auto scale_dest_xla = b.ConstantLiteral(*scale_dest_literal);
-      const auto scale_dest_broadcast =
-          b.Broadcast(scale_dest_xla, xla_shape_sizes(dest_tuple[i]->shape()));
+      const auto scale_dest_broadcast = b.Broadcast(scale_dest_xla, dim_sizes);
       old_dest = b.Mul(old_dest, scale_dest_broadcast);
     }
-    new_dest_tuple.push_back(b.Add(old_dest, source));
+    auto new_dest = b.Add(old_dest, source);
+    if (dim_sizes != dest_sizes) {
+      new_dest = b.Reshape(new_dest, dest_sizes);
+    }
+    new_dest_tuple.push_back(new_dest);
     input_data.push_back(dest_tuple[i]->xlaData());
     input_data.push_back(source_tuple[i]->xlaData());
   }
@@ -291,15 +313,19 @@ XLATensorData::XLATensorData(const autograd::Variable& tensor)
     : grad_(nullptr), b_("XLATensor") {
   auto client_ = XlaGetClient();
   dtype_ = *make_xla_primitive_type(tensor.type().scalarType());
-  shape_ = make_xla_shape(tensor.sizes(), dtype_);
+  shape_ = make_xla_shape({tensor.numel()}, dtype_);
+  logical_shape_ =
+      std::vector<int64>(tensor.sizes().begin(), tensor.sizes().end());
   xla_data_ = tensor_to_xla(tensor, shape_, client_);
 }
 
 XLATensorData::XLATensorData(
     std::unique_ptr<xla::GlobalData> xla_data,
-    const xla::Shape& shape)
+    const xla::Shape& shape,
+    const std::vector<int64>& logical_shape)
     : xla_data_(std::move(xla_data)),
       shape_(shape),
+      logical_shape_(logical_shape),
       dtype_(shape.element_type()),
       b_("XLATensor") {}
 
@@ -315,6 +341,10 @@ xla::Shape XLATensorData::shape() const {
   return shape_;
 }
 
+const std::vector<int64>& XLATensorData::logicalShape() const {
+  return logical_shape_;
+}
+
 xla::GlobalData* XLATensorData::xlaData() const {
   return xla_data_.get();
 }
@@ -324,7 +354,11 @@ at::Tensor XLATensorData::toTensor() {
   // because there's no transferToClient, we'll define an `identity` graph, and
   // execute it
   xla::XlaBuilder b("identity");
-  b.GetTupleElement(b.Tuple({b.Parameter(0, shape_, "x")}), 0);
+  auto x = b.Parameter(0, shape_, "x");
+  if (!logical_shape_.empty()) {
+    x = b.Reshape(x, logical_shape_);
+  }
+  b.GetTupleElement(b.Tuple({x}), 0);
   xla::XlaComputation identity = b.Build().ValueOrDie();
 
   auto client_ = XlaGetClient();

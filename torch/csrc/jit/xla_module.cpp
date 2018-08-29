@@ -102,6 +102,23 @@ XlaModule::XlaModule(
   df_ = gradient.df;
 }
 
+namespace {
+
+std::vector<std::vector<int64>> get_logical_shapes(
+    const std::vector<std::shared_ptr<XLATensor>>& tensors) {
+  std::vector<std::vector<int64>> logical_shapes;
+  for (const auto& tensor : tensors) {
+    if (tensor) {
+      logical_shapes.push_back(tensor->logicalShape());
+    } else {
+      logical_shapes.emplace_back();
+    }
+  }
+  return logical_shapes;
+}
+
+} // namespace
+
 std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     const std::vector<std::shared_ptr<XLATensor>>& inputs) {
   XLATensor::applyOpsMulti(inputs);
@@ -133,11 +150,13 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     }
 
     XlaCodeImpl xla_fwd_impl(f_);
-    auto maybe_computation = xla_fwd_impl.buildXlaComputation(forward_shapes);
+    auto maybe_computation = xla_fwd_impl.buildXlaComputation(
+        forward_shapes, get_logical_shapes(inputs_params_buffers));
     if (!maybe_computation) {
       AT_ERROR("Failed to build XlaComputation");
     }
-    forward_graph_ = std::move(*maybe_computation);
+    forward_graph_ = std::move(maybe_computation->computation);
+    forward_ret_logical_shapes_ = maybe_computation->ret_logical_shapes;
     const auto program_shape =
         client_->GetComputationShape(forward_graph_).ValueOrDie();
     const auto result_shape = program_shape->result();
@@ -161,19 +180,24 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
 
   std::vector<xla::Shape> forward_ret_shape;
   // if return value is a tuple,
+  CHECK_EQ(forward_ret_logical_shapes_.size(), forward_ret_shape_cache_.size());
   if (forward_ret_shape_cache_.size() > 1) {
     auto tuple_elements = client_->DeconstructTuple(*result_dh).ValueOrDie();
     CHECK_EQ(forward_ret_shape_cache_.size(), tuple_elements.size());
     for (size_t i = 0; i < tuple_elements.size(); ++i) {
       auto& tuple_element = tuple_elements[i];
       auto raw_output = std::make_shared<XLATensor>(
-          std::move(tuple_element), forward_ret_shape_cache_[i]);
+          std::move(tuple_element),
+          forward_ret_shape_cache_[i],
+          forward_ret_logical_shapes_[i]);
       raw_outputs.push_back(raw_output);
     }
   } else {
     CHECK_EQ(forward_ret_shape_cache_.size(), size_t(1));
     auto raw_output = std::make_shared<XLATensor>(
-        std::move(result_dh), forward_ret_shape_cache_[0]);
+        std::move(result_dh),
+        forward_ret_shape_cache_[0],
+        forward_ret_logical_shapes_[0]);
     raw_outputs.push_back(raw_output);
   }
 
@@ -232,11 +256,13 @@ void XlaModule::backward(
     }
 
     XlaCodeImpl xla_bwd_impl(df_);
-    auto maybe_computation = xla_bwd_impl.buildXlaComputation(backward_shapes);
+    auto maybe_computation = xla_bwd_impl.buildXlaComputation(
+        backward_shapes, get_logical_shapes(raw_grad_outputs));
     if (!maybe_computation) {
       AT_ERROR("Failed to build backward XlaComputation");
     }
-    backward_graph_ = std::move(*maybe_computation);
+    backward_graph_ = std::move(maybe_computation->computation);
+    backward_ret_logical_shapes_ = maybe_computation->ret_logical_shapes;
     const auto program_shape =
         client_->GetComputationShape(backward_graph_).ValueOrDie();
     const auto result_shape = program_shape->result();
@@ -265,19 +291,25 @@ void XlaModule::backward(
   std::vector<std::shared_ptr<XLATensor>> grad_inputs;
   std::vector<xla::Shape> backward_ret_shape;
   // convert tuples into vector of XLATensor
+  CHECK_EQ(
+      backward_ret_logical_shapes_.size(), backward_ret_shape_cache_.size());
   if (backward_ret_shape_cache_.size() > 1) {
     auto tuple_elements = client_->DeconstructTuple(*result_dh).ValueOrDie();
     CHECK_EQ(backward_ret_shape_cache_.size(), tuple_elements.size());
     for (size_t i = 0; i < tuple_elements.size(); ++i) {
       auto& tuple_element = tuple_elements[i];
       auto grad_input = std::make_shared<XLATensor>(
-          std::move(tuple_element), backward_ret_shape_cache_[i]);
+          std::move(tuple_element),
+          backward_ret_shape_cache_[i],
+          backward_ret_logical_shapes_[i]);
       grad_inputs.push_back(grad_input);
     }
   } else {
     CHECK_EQ(backward_ret_shape_cache_.size(), size_t(1));
     auto grad_input = std::make_shared<XLATensor>(
-        std::move(result_dh), backward_ret_shape_cache_[0]);
+        std::move(result_dh),
+        backward_ret_shape_cache_[0],
+        backward_ret_logical_shapes_[0]);
     grad_inputs.push_back(grad_input);
   }
 
