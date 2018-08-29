@@ -135,9 +135,6 @@ XLATensor::XLATensor(const autograd::Variable& tensor)
     : data_(new XLATensorData(tensor)),
       requires_grad_(tensor.requires_grad()) {}
 
-XLATensor::XLATensor(std::unique_ptr<xla::GlobalData> xla_data)
-    : data_(new XLATensorData(std::move(xla_data))), requires_grad_(false) {}
-
 XLATensor::XLATensor(
     std::unique_ptr<xla::GlobalData> xla_data,
     const xla::Shape& shape)
@@ -296,13 +293,6 @@ XLATensorData::XLATensorData(const autograd::Variable& tensor)
   dtype_ = *make_xla_primitive_type(tensor.type().scalarType());
   shape_ = make_xla_shape(tensor.sizes(), dtype_);
   xla_data_ = tensor_to_xla(tensor, shape_, client_);
-}
-
-XLATensorData::XLATensorData(std::unique_ptr<xla::GlobalData> xla_data)
-    : xla_data_(std::move(xla_data)), b_("XLATensor") {
-  auto client_ = XlaGetClient();
-  shape_ = client_->GetShape(*xla_data_).ValueOrDie();
-  dtype_ = shape_.element_type();
 }
 
 XLATensorData::XLATensorData(
