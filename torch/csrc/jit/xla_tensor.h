@@ -27,6 +27,8 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
 
   virtual xla::Shape shape() const;
 
+  virtual std::vector<int64_t> size() const;
+
   virtual xla::GlobalData* xlaData() const;
 
   // Basic tensor operations used by the optimizers.
@@ -82,6 +84,7 @@ class XLATensorData : public XLATensor {
   void setGrad(std::shared_ptr<XLATensor> grad) override;
 
   xla::Shape shape() const override;
+  std::vector<int64_t> size() const override;
   xla::GlobalData* xlaData() const override;
 
   // Basic tensor operations used by the optimizers.

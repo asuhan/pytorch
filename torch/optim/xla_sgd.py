@@ -5,7 +5,7 @@ from .sgd import SGD
 
 def _zeros_like(p):
     if isinstance(p, torch._C.XLATensor):
-        return torch._C.XLATensor(torch.zeros_like(p.to_tensor()))
+        return torch._C.XLATensor(torch.zeros(p.size()))
     return torch.zeros_like(p.data)
 
 def _apply_weight_decay(d_p_multi, p_multi, weight_decay):

@@ -162,6 +162,11 @@ void XLATensor::setGrad(std::shared_ptr<XLATensor> grad) {
 xla::Shape XLATensor::shape() const {
   return data_->shape();
 }
+
+std::vector<int64_t> XLATensor::size() const {
+  return data_->size();
+}
+
 xla::GlobalData* XLATensor::xlaData() const {
   return data_->xlaData();
 }
@@ -313,6 +318,11 @@ void XLATensorData::setGrad(std::shared_ptr<XLATensor> grad) {
 
 xla::Shape XLATensorData::shape() const {
   return shape_;
+}
+
+std::vector<int64_t> XLATensorData::size() const {
+  return std::vector<int64_t>(
+      shape_.dimensions().begin(), shape_.dimensions().end());
 }
 
 xla::GlobalData* XLATensorData::xlaData() const {
