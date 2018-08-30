@@ -1146,19 +1146,21 @@ void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
 
 XlaNode to_rank1(
     const xla::XlaOp op,
-    const std::vector<int64>& permutation,
+    const std::vector<int64>& permutation_in,
     xla::XlaBuilder* b) {
   const auto op_shape = b->GetShape(op).ValueOrDie();
-  if (!permutation.empty()) {
-    CHECK_EQ(op_shape.dimensions_size(), permutation.size());
+  if (!permutation_in.empty()) {
+    CHECK_EQ(op_shape.dimensions_size(), permutation_in.size());
   }
   const auto op_elems = std::accumulate(
       op_shape.dimensions().begin(),
       op_shape.dimensions().end(),
       1,
       [](const int64 lhs, const int64 rhs) { return lhs * rhs; });
+  auto permutation = permutation_in;
   if (permutation.empty()) {
-    return {b->Reshape(op, {op_elems}), {}};
+    permutation.resize(op_shape.dimensions_size());
+    std::iota(permutation.begin(), permutation.end(), 0);
   }
   std::vector<int64> logical_size(op_shape.dimensions_size());
   for (size_t i = 0; i < op_shape.dimensions_size(); ++i) {
@@ -1371,8 +1373,10 @@ at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
         const auto zero_literal = xla::Literal::CreateR0<float>(0);
         const auto xla_zero = b.ConstantLiteral(*zero_literal);
         xla::XlaOp xla_output = b.Max(*XLA_OP(0), xla_zero);
+        const auto xla_output_rank1 = to_rank1(xla_output, {}, &b);
         const auto current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, xla_output_rank1);
         CHECK(it_ok.second);
         break;
       }
