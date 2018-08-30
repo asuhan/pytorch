@@ -168,6 +168,10 @@ const std::vector<int64>& XLATensor::logicalShape() const {
   return data_->logicalShape();
 }
 
+std::vector<int64_t> XLATensor::size() const {
+  return data_->size();
+}
+
 xla::GlobalData* XLATensor::xlaData() const {
   return data_->xlaData();
 }
@@ -343,6 +347,14 @@ xla::Shape XLATensorData::shape() const {
 
 const std::vector<int64>& XLATensorData::logicalShape() const {
   return logical_shape_;
+}
+
+std::vector<int64_t> XLATensorData::size() const {
+  if (!logical_shape_.empty()) {
+    return std::vector<int64_t>(logical_shape_.begin(), logical_shape_.end());
+  }
+  return std::vector<int64_t>(
+      shape_.dimensions().begin(), shape_.dimensions().end());
 }
 
 xla::GlobalData* XLATensorData::xlaData() const {
