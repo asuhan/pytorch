@@ -20,9 +20,6 @@ class XlaCodeImpl {
  public:
   XlaCodeImpl(const std::shared_ptr<Graph>& graph);
 
-  at::optional<std::vector<xla::Shape>> captureInputShapes(
-      const std::vector<at::Tensor>& inputs) const;
-
   at::optional<XlaComputationResult> buildXlaComputation(
       const std::vector<xla::Shape>& parameter_shapes,
       const std::vector<std::vector<int64>>& logical_parameter_shapes) const;

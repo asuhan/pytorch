@@ -51,21 +51,6 @@ xla::XlaComputationClient* XlaGetClient() {
 
 XlaCodeImpl::XlaCodeImpl(const std::shared_ptr<Graph>& graph) : graph_(graph) {}
 
-at::optional<std::vector<xla::Shape>> XlaCodeImpl::captureInputShapes(
-    const std::vector<at::Tensor>& inputs) const {
-  std::vector<xla::Shape> parameter_shapes;
-  for (const auto& tensor : inputs) {
-    const auto tensor_element_type =
-        make_xla_primitive_type(tensor.type().scalarType());
-    if (!tensor_element_type) {
-      return at::nullopt;
-    }
-    parameter_shapes.push_back(
-        make_xla_shape(tensor.sizes(), *tensor_element_type));
-  }
-  return parameter_shapes;
-}
-
 namespace {
 
 xla::XlaOp build_binary_op(
