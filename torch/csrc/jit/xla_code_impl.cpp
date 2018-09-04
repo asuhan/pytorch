@@ -15,16 +15,6 @@ std::vector<int64> xla_i64_list(const at::IntList& input) {
   return output;
 }
 
-xla::Shape make_xla_shape(
-    const at::IntList& tensor_dimensions,
-    const xla::PrimitiveType type) {
-  const auto dimensions = xla_i64_list(tensor_dimensions);
-  std::vector<int64> layout(dimensions.size());
-  // XLA uses minor-to-major.
-  std::iota(layout.rbegin(), layout.rend(), 0);
-  return xla::ShapeUtil::MakeShapeWithLayout(type, dimensions, layout);
-}
-
 at::optional<xla::PrimitiveType> make_xla_primitive_type(
     const at::ScalarType scalar_type) {
   switch (scalar_type) {
@@ -796,7 +786,7 @@ at::optional<xla::XlaOp> build_log_softmax(
   std::vector<int64> broadcast_dimensions;
   for (size_t broadcast_dim = 0; broadcast_dim < input_size.size();
        ++broadcast_dim) {
-    if (broadcast_dim == dim) {
+    if (static_cast<int64_t>(broadcast_dim) == dim) {
       continue;
     }
     broadcast_dimensions.push_back(broadcast_dim);
@@ -829,7 +819,7 @@ at::optional<xla::XlaOp> build_log_softmax_grad(
   std::vector<int64> broadcast_dimensions;
   for (size_t broadcast_dim = 0; broadcast_dim < input_size.size();
        ++broadcast_dim) {
-    if (broadcast_dim == dim) {
+    if (static_cast<int64_t>(broadcast_dim) == dim) {
       continue;
     }
     broadcast_dimensions.push_back(broadcast_dim);
@@ -956,6 +946,7 @@ std::vector<const Value*> input_list_attr(const Node* parent, const size_t id) {
     return result;
   }
   CHECK(false) << "Constant with id " << id << " not found.";
+  return {};
 }
 
 at::optional<xla::XlaOp> build_stack(
