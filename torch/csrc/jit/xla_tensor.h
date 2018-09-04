@@ -1,7 +1,7 @@
 #ifndef XLA_TENSOR_H
 #define XLA_TENSOR_H
 
-#include "tensorflow/compiler/xla/client/xla_client/xla_builder.h"
+#include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/rpc/computation_client.h"
 #include "torch/csrc/autograd/variable.h"
 #include "torch/csrc/jit/ir.h"

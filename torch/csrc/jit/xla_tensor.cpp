@@ -1,4 +1,5 @@
 #include "xla_tensor.h"
+#include "tensorflow/compiler/xla/literal_util.h"
 #include "torch/csrc/autograd/variable.h"
 #include "xla_code_impl.h"
 
@@ -234,44 +235,47 @@ void XLATensor::mulAddMulti(
   xla::XlaBuilder b("mulAddMulti");
   for (size_t i = 0; i < dest_tuple.size(); ++i) {
     const auto dest_shape = dest_tuple[i]->shape();
-    auto old_dest = b.Parameter(2 * i, dest_shape, "dest_" + std::to_string(i));
+    auto old_dest =
+        xla::Parameter(&b, 2 * i, dest_shape, "dest_" + std::to_string(i));
     const auto source_shape = source_tuple[i]->shape();
-    auto source =
-        b.Parameter(2 * i + 1, source_shape, "source_" + std::to_string(i));
+    auto source = xla::Parameter(
+        &b, 2 * i + 1, source_shape, "source_" + std::to_string(i));
     auto dest_sizes = xla_shape_sizes(dest_shape);
     auto dim_sizes = dest_sizes;
     if (source_tuple[i]->logicalShape().empty() !=
         dest_tuple[i]->logicalShape().empty()) {
       if (source_tuple[i]->logicalShape().empty()) {
         CHECK_EQ(dest_tuple[i]->shape().dimensions_size(), 1);
-        source = b.Reshape(source, dim_sizes);
+        source = xla::Reshape(source, dim_sizes);
       } else {
         CHECK_EQ(source_shape.dimensions_size(), 1);
         dim_sizes = xla_shape_sizes(source_shape);
-        old_dest = b.Reshape(old_dest, dim_sizes);
+        old_dest = xla::Reshape(old_dest, dim_sizes);
       }
     }
     if (alpha != 1) {
-      const auto alpha_literal = xla::Literal::CreateR0<float>(alpha);
-      const auto alpha_xla = b.ConstantLiteral(*alpha_literal);
-      const auto alpha_source = b.Broadcast(alpha_xla, dim_sizes);
-      source = b.Mul(source, alpha_source);
+      const auto alpha_literal = xla::LiteralUtil::CreateR0<float>(alpha);
+      const auto alpha_xla = xla::ConstantLiteral(&b, *alpha_literal);
+      const auto alpha_source = xla::Broadcast(alpha_xla, dim_sizes);
+      source = source * alpha_source;
     }
     if (scale_dest != 1) {
-      const auto scale_dest_literal = xla::Literal::CreateR0<float>(scale_dest);
-      const auto scale_dest_xla = b.ConstantLiteral(*scale_dest_literal);
-      const auto scale_dest_broadcast = b.Broadcast(scale_dest_xla, dim_sizes);
-      old_dest = b.Mul(old_dest, scale_dest_broadcast);
+      const auto scale_dest_literal =
+          xla::LiteralUtil::CreateR0<float>(scale_dest);
+      const auto scale_dest_xla = xla::ConstantLiteral(&b, *scale_dest_literal);
+      const auto scale_dest_broadcast =
+          xla::Broadcast(scale_dest_xla, dim_sizes);
+      old_dest = old_dest * scale_dest_broadcast;
     }
-    auto new_dest = b.Add(old_dest, source);
+    auto new_dest = old_dest + source;
     if (dim_sizes != dest_sizes) {
-      new_dest = b.Reshape(new_dest, dest_sizes);
+      new_dest = xla::Reshape(new_dest, dest_sizes);
     }
     new_dest_tuple.push_back(new_dest);
     input_data.push_back(dest_tuple[i]->xlaData());
     input_data.push_back(source_tuple[i]->xlaData());
   }
-  b.Tuple(new_dest_tuple);
+  xla::Tuple(&b, new_dest_tuple);
   auto computation = b.Build().ValueOrDie();
   auto client = XlaGetClient();
   auto result_tuple = client->ExecuteComputation(computation, input_data);
@@ -286,11 +290,11 @@ void XLATensor::zeroMulti(
   std::vector<xla::XlaOp> new_dest_tuple;
   for (auto& dest : dest_tuple) {
     const auto dest_shape = dest->shape();
-    const auto zero =
-        b.ConstantLiteral(xla::Literal::Zero(dest_shape.element_type()));
-    new_dest_tuple.push_back(b.Broadcast(zero, xla_shape_sizes(dest_shape)));
+    const auto zero = xla::ConstantLiteral(
+        &b, xla::LiteralUtil::Zero(dest_shape.element_type()));
+    new_dest_tuple.push_back(xla::Broadcast(zero, xla_shape_sizes(dest_shape)));
   }
-  b.Tuple(new_dest_tuple);
+  xla::Tuple(&b, new_dest_tuple);
   auto computation = b.Build().ValueOrDie();
   auto client = XlaGetClient();
   auto result_tuple = client->ExecuteComputation(computation, {});
@@ -366,11 +370,11 @@ at::Tensor XLATensorData::toTensor() {
   // because there's no transferToClient, we'll define an `identity` graph, and
   // execute it
   xla::XlaBuilder b("identity");
-  auto x = b.Parameter(0, shape_, "x");
+  auto x = xla::Parameter(&b, 0, shape_, "x");
   if (!logical_shape_.empty()) {
-    x = b.Reshape(x, logical_shape_);
+    x = xla::Reshape(x, logical_shape_);
   }
-  b.GetTupleElement(b.Tuple({x}), 0);
+  xla::GetTupleElement(xla::Tuple(&b, {x}), 0);
   xla::XlaComputation identity = b.Build().ValueOrDie();
 
   auto client_ = XlaGetClient();
@@ -382,52 +386,51 @@ at::Tensor XLATensorData::toTensor() {
 
 void XLATensorData::add_(XLATensor& other, const at::Scalar& alpha) {
   other.applyOps();
-  const auto alpha_literal = xla::Literal::CreateR0<float>(alpha.toDouble());
-  const auto alpha_xla = b_.ConstantLiteral(*alpha_literal);
+  const auto alpha_literal =
+      xla::LiteralUtil::CreateR0<float>(alpha.toDouble());
+  const auto alpha_xla = xla::ConstantLiteral(&b_, *alpha_literal);
   const auto old_tensor =
-      operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
+      operations_ ? *operations_ : xla::Parameter(&b_, 0, shape_, "self");
   if (!operations_) {
     CHECK(operations_params_.empty());
     operations_params_.push_back(xla_data_.get());
   }
-  operations_ = b_.Add(
-      old_tensor,
-      b_.Mul(
-          b_.Parameter(operations_params_.size(), shape_, "other"),
-          b_.Broadcast(alpha_xla, xla_shape_sizes(shape_))));
+  operations_ = old_tensor +
+      xla::Parameter(&b_, operations_params_.size(), shape_, "other") *
+          xla::Broadcast(alpha_xla, xla_shape_sizes(shape_));
   operations_params_.push_back(other.xlaData());
 }
 
 void XLATensorData::mul_(XLATensor& other) {
   other.applyOps();
   const auto old_tensor =
-      operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
+      operations_ ? *operations_ : xla::Parameter(&b_, 0, shape_, "self");
   if (!operations_) {
     CHECK(operations_params_.empty());
     operations_params_.push_back(xla_data_.get());
   }
-  operations_ = b_.Mul(
-      old_tensor, b_.Parameter(operations_params_.size(), shape_, "other"));
+  operations_ = old_tensor *
+      xla::Parameter(&b_, operations_params_.size(), shape_, "other");
   operations_params_.push_back(other.xlaData());
 }
 
 void XLATensorData::mul_(const at::Scalar& other) {
   const auto old_tensor =
-      operations_ ? *operations_ : b_.Parameter(0, shape_, "self");
+      operations_ ? *operations_ : xla::Parameter(&b_, 0, shape_, "self");
   if (!operations_) {
     CHECK(operations_params_.empty());
     operations_params_.push_back(xla_data_.get());
   }
-  const auto other_literal = xla::Literal::CreateR0<float>(other.toDouble());
-  const auto other_xla = b_.ConstantLiteral(*other_literal);
-  operations_ =
-      b_.Mul(old_tensor, b_.Broadcast(other_xla, xla_shape_sizes(shape_)));
+  const auto other_literal =
+      xla::LiteralUtil::CreateR0<float>(other.toDouble());
+  const auto other_xla = xla::ConstantLiteral(&b_, *other_literal);
+  operations_ = old_tensor * xla::Broadcast(other_xla, xla_shape_sizes(shape_));
 }
 
 void XLATensorData::zero_() {
   resetOperationsState();
-  const auto zero = b_.ConstantLiteral(xla::Literal::Zero(dtype_));
-  operations_ = b_.Broadcast(zero, xla_shape_sizes(shape_));
+  const auto zero = xla::ConstantLiteral(&b_, xla::LiteralUtil::Zero(dtype_));
+  operations_ = xla::Broadcast(zero, xla_shape_sizes(shape_));
   applyOps();
 }
 
