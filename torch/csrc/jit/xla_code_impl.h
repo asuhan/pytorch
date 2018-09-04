@@ -2,7 +2,7 @@
 
 #ifdef WITH_XLA
 
-#include "tensorflow/compiler/xla/client/xla_client/xla_builder.h"
+#include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/rpc/computation_client.h"
 #include "torch/csrc/jit/ir.h"
 
