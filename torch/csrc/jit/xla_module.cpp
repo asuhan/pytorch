@@ -157,9 +157,8 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     }
     forward_graph_ = std::move(maybe_computation->computation);
     forward_ret_logical_shapes_ = maybe_computation->ret_logical_shapes;
-    const auto program_shape =
-        client_->GetComputationShape(forward_graph_).ValueOrDie();
-    const auto result_shape = program_shape->result();
+    const auto program_shape = forward_graph_.GetProgramShape().ValueOrDie();
+    const auto result_shape = program_shape.result();
     if (xla::ShapeUtil::IsTuple(result_shape)) {
       for (const auto& element_shape : result_shape.tuple_shapes()) {
         forward_ret_shape_cache_.push_back(element_shape);
@@ -263,9 +262,8 @@ void XlaModule::backward(
     }
     backward_graph_ = std::move(maybe_computation->computation);
     backward_ret_logical_shapes_ = maybe_computation->ret_logical_shapes;
-    const auto program_shape =
-        client_->GetComputationShape(backward_graph_).ValueOrDie();
-    const auto result_shape = program_shape->result();
+    const auto program_shape = backward_graph_.GetProgramShape().ValueOrDie();
+    const auto result_shape = program_shape.result();
     if (xla::ShapeUtil::IsTuple(result_shape)) {
       for (const auto& element_shape : result_shape.tuple_shapes()) {
         backward_ret_shape_cache_.push_back(element_shape);
