@@ -1,6 +1,7 @@
 #ifndef XLA_TENSOR_H
 #define XLA_TENSOR_H
 
+#include "tensorflow/cc/framework/ops.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/rpc/computation_client.h"
 #include "torch/csrc/autograd/variable.h"
@@ -18,7 +19,7 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensor);
   XLATensor(const autograd::Variable&);
   XLATensor(
-      std::unique_ptr<xla::GlobalData>,
+      std::unique_ptr<tensorflow::Output>,
       const xla::Shape& shape,
       const std::vector<int64>& logical_shape);
 
@@ -36,7 +37,7 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
 
   virtual std::vector<int64_t> size() const;
 
-  virtual xla::GlobalData* xlaData() const;
+  virtual tensorflow::Output* xlaData() const;
 
   // Basic tensor operations used by the optimizers.
   virtual void add_(XLATensor& other, const at::Scalar& alpha);
@@ -71,7 +72,7 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
 
   static void setMultiFromResult(
       const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
-      std::vector<std::unique_ptr<xla::GlobalData>>& new_dest_elements);
+      std::vector<std::unique_ptr<tensorflow::Output>>& new_dest_elements);
 
   std::shared_ptr<XLATensorData> data_;
   bool requires_grad_;
@@ -84,7 +85,7 @@ class XLATensorData : public XLATensor {
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensorData);
   XLATensorData(const autograd::Variable&);
   XLATensorData(
-      std::unique_ptr<xla::GlobalData>,
+      std::unique_ptr<tensorflow::Output>,
       const xla::Shape& shape,
       const std::vector<int64>& logical_shape);
 
@@ -95,7 +96,7 @@ class XLATensorData : public XLATensor {
   const std::vector<int64>& logicalShape() const override;
   xla::Shape shape() const override;
   std::vector<int64_t> size() const override;
-  xla::GlobalData* xlaData() const override;
+  tensorflow::Output* xlaData() const override;
 
   // Basic tensor operations used by the optimizers.
   void add_(XLATensor& other, const at::Scalar& alpha) override;
@@ -109,7 +110,7 @@ class XLATensorData : public XLATensor {
  private:
   void resetOperationsState();
 
-  std::unique_ptr<xla::GlobalData> xla_data_;
+  std::unique_ptr<tensorflow::Output> xla_data_;
   xla::Shape shape_;
   std::vector<int64> logical_shape_;
   xla::PrimitiveType dtype_; // naming dtype for consistency with at::Tensor
@@ -118,7 +119,7 @@ class XLATensorData : public XLATensor {
   // Keeps track of operations applied so far.
   at::optional<xla::XlaOp> operations_;
   xla::XlaBuilder b_;
-  std::vector<xla::GlobalData*> operations_params_;
+  std::vector<tensorflow::Output*> operations_params_;
 
   friend class XLATensor;
 };

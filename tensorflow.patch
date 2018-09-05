@@ -1,8 +1,8 @@
 diff --git a/tensorflow/compiler/xla/rpc/BUILD b/tensorflow/compiler/xla/rpc/BUILD
-index 97fcd37f6b..d65ee7ffc0 100644
+index 97fcd37f6b..35bcd357c3 100644
 --- a/tensorflow/compiler/xla/rpc/BUILD
 +++ b/tensorflow/compiler/xla/rpc/BUILD
-@@ -34,6 +34,55 @@ cc_library(
+@@ -34,6 +34,62 @@ cc_library(
      ],
  )
  
@@ -46,10 +46,17 @@ index 97fcd37f6b..d65ee7ffc0 100644
 +    deps = [
 +        "grpc_stub",
 +        "@com_google_absl//absl/strings",
++        "//tensorflow/cc:cc_ops",
++        "//tensorflow/cc:client_session",
++        "//tensorflow/cc:ops",
++        "//tensorflow/cc:scope",
 +        "//tensorflow/compiler/xla:literal_util",
 +        "//tensorflow/compiler/xla/client",
 +        "//tensorflow/compiler/xla/client:global_data",
 +        "//tensorflow/compiler/xla/client:xla_computation",
++        "//tensorflow/compiler/xrt:xrt_proto",
++        "//tensorflow/compiler/xrt:xrt_server",
++        "//tensorflow/compiler/xrt/cc:xrt_ops",
 +        "//tensorflow/core:lib",
 +        "//tensorflow/core/kernels:conv_ops",
 +    ],
@@ -60,16 +67,17 @@ index 97fcd37f6b..d65ee7ffc0 100644
      srcs = ["grpc_service_main.cc"],
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.cc b/tensorflow/compiler/xla/rpc/computation_client.cc
 new file mode 100644
-index 0000000000..5e9e6b3431
+index 0000000000..2de4c5b6fc
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.cc
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,103 @@
 +#include "tensorflow/compiler/xla/rpc/computation_client.h"
-+#include "grpc++/create_channel.h"
-+#include "grpc++/support/channel_arguments.h"
-+#include "tensorflow/compiler/xla/client/client.h"
-+#include "tensorflow/compiler/xla/legacy_flags/debug_options_flags.h"
-+#include "tensorflow/compiler/xla/rpc/grpc_stub.h"
++#include "tensorflow/cc/framework/ops.h"
++#include "tensorflow/cc/framework/scope.h"
++#include "tensorflow/cc/ops/const_op.h"
++#include "tensorflow/compiler/xrt/cc/ops/xrt_execute_op.h"
++#include "tensorflow/compiler/xrt/cc/ops/xrt_state_ops.h"
++#include "tensorflow/compiler/xrt/xrt.pb.h"
 +
 +namespace xla {
 +
@@ -77,101 +85,87 @@ index 0000000000..5e9e6b3431
 + public:
 +  XlaComputationClientImpl();
 +
-+  std::unique_ptr<xla::GlobalData> TransferParameterToServer(
++  std::unique_ptr<::tensorflow::Output> TransferParameterToServer(
 +      const xla::Literal& literal) const;
 +
-+  std::unique_ptr<GlobalData> ExecuteComputation(
++  std::unique_ptr<::tensorflow::Output> ExecuteComputation(
 +      const XlaComputation& computation,
-+      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++      tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const;
 +
 +  std::unique_ptr<Literal> ExecuteComputationAndTransfer(
 +      const XlaComputation& computation,
-+      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++      tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const;
 +
-+  StatusOr<std::vector<std::unique_ptr<GlobalData>>> DeconstructTuple(
-+      const GlobalData& data) const;
-+
-+ private:
-+  std::unique_ptr<Client> client_;
-+  std::unique_ptr<grpc::XlaService::Stub> xla_service_;
-+  std::unique_ptr<GRPCStub> stub_;
++  StatusOr<std::vector<std::unique_ptr<::tensorflow::Output>>> DeconstructTuple(
++      const ::tensorflow::Output& data) const;
 +};
 +
-+XlaComputationClientImpl::XlaComputationClientImpl() {
-+  constexpr int port = 51000;
-+  ::grpc::ChannelArguments ch_args;
-+  ch_args.SetMaxReceiveMessageSize(-1);
-+  auto channel = ::grpc::CreateCustomChannel(
-+      absl::StrCat("localhost:", port), ::grpc::InsecureChannelCredentials(),
-+      ch_args);
-+  channel->WaitForConnected(gpr_time_add(
-+      gpr_now(GPR_CLOCK_REALTIME), gpr_time_from_seconds(10, GPR_TIMESPAN)));
-+  LOG(INFO) << "Channel to server is connected on port " << port;
++XlaComputationClientImpl::XlaComputationClientImpl() {}
 +
-+  xla_service_ = grpc::XlaService::NewStub(channel);
-+  stub_.reset(new GRPCStub(xla_service_.get()));
-+  client_.reset(new Client(stub_.get()));
++namespace {
++
++std::string DeviceFromFlag() { return "/device:CPU:0"; }
++
++}  // namespace
++
++std::unique_ptr<::tensorflow::Output>
++XlaComputationClientImpl::TransferParameterToServer(
++    const xla::Literal& literal) const {
++  xrt::XLAAllocation alloc;
++  alloc.set_device_ordinal(0);
++  *alloc.mutable_value() = literal.ToProto();
++  ::tensorflow::Scope root =
++      ::tensorflow::Scope::NewRootScope().WithDevice(DeviceFromFlag());
++  auto value = ::tensorflow::ops::Const(root.WithDevice("/device:CPU:0"),
++                                        alloc.SerializeAsString());
++  auto handle = ::tensorflow::ops::XRTAllocate(root, value);
++  return std::unique_ptr<::tensorflow::Output>(
++      new ::tensorflow::Output(handle));
 +}
 +
-+std::unique_ptr<GlobalData> XlaComputationClientImpl::ExecuteComputation(
++std::unique_ptr<::tensorflow::Output>
++XlaComputationClientImpl::ExecuteComputation(
 +    const XlaComputation& computation,
-+    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
-+  ExecutionOptions eo;
-+  *eo.mutable_debug_options() = legacy_flags::GetDebugOptionsFromFlags();
-+  StatusOr<std::unique_ptr<GlobalData>> result_or_status =
-+      client_->Execute(computation, arguments, &eo);
-+  if (!result_or_status.ok()) {
-+    LOG(FATAL) << result_or_status.status();
-+  }
-+  return std::move(result_or_status.ValueOrDie());
++    tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const {
++  ::tensorflow::Scope root =
++      ::tensorflow::Scope::NewRootScope().WithDevice(DeviceFromFlag());
++  return nullptr;
 +}
 +
 +std::unique_ptr<Literal>
 +XlaComputationClientImpl::ExecuteComputationAndTransfer(
 +    const XlaComputation& computation,
-+    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
-+  ExecutionOptions eo;
-+  *eo.mutable_debug_options() = legacy_flags::GetDebugOptionsFromFlags();
-+  StatusOr<std::unique_ptr<Literal>> result_or_status =
-+      client_->ExecuteAndTransfer(computation, arguments, &eo);
-+  if (!result_or_status.ok()) {
-+    LOG(FATAL) << result_or_status.status();
-+  }
-+  return std::move(result_or_status.ValueOrDie());
++    tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const {
++  return nullptr;
 +}
 +
-+std::unique_ptr<xla::GlobalData>
-+XlaComputationClientImpl::TransferParameterToServer(
-+    const xla::Literal& literal) const {
-+  return client_->TransferToServer(literal).ValueOrDie();
-+}
-+
-+StatusOr<std::vector<std::unique_ptr<GlobalData>>>
-+XlaComputationClientImpl::DeconstructTuple(const GlobalData& data) const {
-+  return client_->DeconstructTuple(data);
++StatusOr<std::vector<std::unique_ptr<::tensorflow::Output>>>
++XlaComputationClientImpl::DeconstructTuple(
++    const ::tensorflow::Output& data) const {
++  return std::vector<std::unique_ptr<::tensorflow::Output>>{};
 +}
 +
 +XlaComputationClient::XlaComputationClient()
 +    : pImpl(new XlaComputationClientImpl()) {}
 +
-+std::unique_ptr<GlobalData> XlaComputationClient::ExecuteComputation(
++std::unique_ptr<::tensorflow::Output> XlaComputationClient::ExecuteComputation(
 +    const XlaComputation& computation,
-+    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
++    tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const {
 +  return pImpl->ExecuteComputation(computation, arguments);
 +}
 +
 +std::unique_ptr<Literal> XlaComputationClient::ExecuteComputationAndTransfer(
 +    const XlaComputation& computation,
-+    tensorflow::gtl::ArraySlice<GlobalData*> arguments) const {
++    tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const {
 +  return pImpl->ExecuteComputationAndTransfer(computation, arguments);
 +}
 +
-+StatusOr<std::vector<std::unique_ptr<GlobalData>>>
-+XlaComputationClient::DeconstructTuple(const GlobalData& data) const {
++StatusOr<std::vector<std::unique_ptr<::tensorflow::Output>>>
++XlaComputationClient::DeconstructTuple(const ::tensorflow::Output& data) const {
 +  return pImpl->DeconstructTuple(data);
 +}
 +
-+std::unique_ptr<xla::GlobalData>
++std::unique_ptr<::tensorflow::Output>
 +XlaComputationClient::TransferParameterToServer(
 +    const xla::Literal& literal) const {
 +  return pImpl->TransferParameterToServer(literal);
@@ -182,14 +176,14 @@ index 0000000000..5e9e6b3431
 +}  // namespace xla
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.h b/tensorflow/compiler/xla/rpc/computation_client.h
 new file mode 100644
-index 0000000000..e51e272492
+index 0000000000..89f4f93a6c
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.h
 @@ -0,0 +1,39 @@
 +#ifndef TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +#define TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +
-+#include "tensorflow/compiler/xla/client/global_data.h"
++#include "tensorflow/cc/framework/ops.h"
 +#include "tensorflow/compiler/xla/client/xla_computation.h"
 +#include "tensorflow/compiler/xla/literal_util.h"
 +#include "tensorflow/core/lib/gtl/array_slice.h"
@@ -204,19 +198,19 @@ index 0000000000..e51e272492
 +
 +  ~XlaComputationClient();
 +
-+  std::unique_ptr<xla::GlobalData> TransferParameterToServer(
++  std::unique_ptr<::tensorflow::Output> TransferParameterToServer(
 +      const xla::Literal& literal) const;
 +
-+  std::unique_ptr<GlobalData> ExecuteComputation(
++  std::unique_ptr<::tensorflow::Output> ExecuteComputation(
 +      const XlaComputation& computation,
-+      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++      tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const;
 +
 +  std::unique_ptr<Literal> ExecuteComputationAndTransfer(
 +      const XlaComputation& computation,
-+      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
++      tensorflow::gtl::ArraySlice<::tensorflow::Output*> arguments) const;
 +
-+  StatusOr<std::vector<std::unique_ptr<GlobalData>>> DeconstructTuple(
-+      const GlobalData& data) const;
++  StatusOr<std::vector<std::unique_ptr<::tensorflow::Output>>> DeconstructTuple(
++      const ::tensorflow::Output& data) const;
 +
 + private:
 +  std::unique_ptr<XlaComputationClientImpl> pImpl;

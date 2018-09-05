@@ -169,7 +169,7 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     forward_graph_initialized_ = true;
   }
 
-  std::vector<xla::GlobalData*> inputs_params_buffers_data;
+  std::vector<tensorflow::Output*> inputs_params_buffers_data;
   for (auto p : inputs_params_buffers) {
     inputs_params_buffers_data.push_back(p->xlaData());
   }
@@ -274,12 +274,12 @@ void XlaModule::backward(
     backward_graph_initialized_ = true;
   }
 
-  std::vector<xla::GlobalData*> raw_grad_outputs_data;
+  std::vector<tensorflow::Output*> raw_grad_outputs_data;
   for (auto p : raw_grad_outputs) {
     if (!p) {
       continue;
     }
-    xla::GlobalData* ptr = p->xlaData();
+    auto ptr = p->xlaData();
     raw_grad_outputs_data.push_back(ptr);
   }
 

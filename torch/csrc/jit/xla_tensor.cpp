@@ -69,7 +69,7 @@ void linearize_tensor<int64>(
 }
 
 template <class NativeT>
-std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
+std::unique_ptr<tensorflow::Output> tensor_to_xla_impl(
     const at::Tensor& param_tensor,
     const xla::Shape& param_shape,
     const xla::XlaComputationClient* client) {
@@ -83,7 +83,7 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
   return client->TransferParameterToServer(literal);
 }
 
-std::unique_ptr<xla::GlobalData> tensor_to_xla(
+std::unique_ptr<tensorflow::Output> tensor_to_xla(
     const at::Tensor& param_tensor,
     const xla::Shape& param_shape,
     const xla::XlaComputationClient* client) {
@@ -137,7 +137,7 @@ XLATensor::XLATensor(const autograd::Variable& tensor)
       requires_grad_(tensor.requires_grad()) {}
 
 XLATensor::XLATensor(
-    std::unique_ptr<xla::GlobalData> xla_data,
+    std::unique_ptr<tensorflow::Output> xla_data,
     const xla::Shape& shape,
     const std::vector<int64>& logical_shape)
     : data_(new XLATensorData(std::move(xla_data), shape, logical_shape)),
@@ -173,7 +173,7 @@ std::vector<int64_t> XLATensor::size() const {
   return data_->size();
 }
 
-xla::GlobalData* XLATensor::xlaData() const {
+tensorflow::Output* XLATensor::xlaData() const {
   return data_->xlaData();
 }
 
@@ -231,7 +231,7 @@ void XLATensor::mulAddMulti(
   applyOpsMulti(dest_tuple);
   applyOpsMulti(source_tuple);
   std::vector<xla::XlaOp> new_dest_tuple;
-  std::vector<xla::GlobalData*> input_data;
+  std::vector<tensorflow::Output*> input_data;
   xla::XlaBuilder b("mulAddMulti");
   for (size_t i = 0; i < dest_tuple.size(); ++i) {
     const auto dest_shape = dest_tuple[i]->shape();
@@ -304,7 +304,7 @@ void XLATensor::zeroMulti(
 
 void XLATensor::setMultiFromResult(
     const std::vector<std::shared_ptr<XLATensor>>& dest_tuple,
-    std::vector<std::unique_ptr<xla::GlobalData>>& new_dest_elements) {
+    std::vector<std::unique_ptr<tensorflow::Output>>& new_dest_elements) {
   CHECK_EQ(new_dest_elements.size(), dest_tuple.size());
   for (size_t i = 0; i < dest_tuple.size(); ++i) {
     auto dest_tensor_data =
@@ -328,7 +328,7 @@ XLATensorData::XLATensorData(const autograd::Variable& tensor)
 }
 
 XLATensorData::XLATensorData(
-    std::unique_ptr<xla::GlobalData> xla_data,
+    std::unique_ptr<tensorflow::Output> xla_data,
     const xla::Shape& shape,
     const std::vector<int64>& logical_shape)
     : xla_data_(std::move(xla_data)),
@@ -361,7 +361,7 @@ std::vector<int64_t> XLATensorData::size() const {
       shape_.dimensions().begin(), shape_.dimensions().end());
 }
 
-xla::GlobalData* XLATensorData::xlaData() const {
+tensorflow::Output* XLATensorData::xlaData() const {
   return xla_data_.get();
 }
 
