@@ -60,10 +60,10 @@ index 97fcd37f6b..d65ee7ffc0 100644
      srcs = ["grpc_service_main.cc"],
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.cc b/tensorflow/compiler/xla/rpc/computation_client.cc
 new file mode 100644
-index 0000000000..f0f542d957
+index 0000000000..a6f382f1c1
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.cc
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,131 @@
 +#include "tensorflow/compiler/xla/rpc/computation_client.h"
 +#include "grpc++/create_channel.h"
 +#include "grpc++/support/channel_arguments.h"
@@ -87,8 +87,6 @@ index 0000000000..f0f542d957
 +  std::unique_ptr<Literal> ExecuteComputationAndTransfer(
 +      const XlaComputation& computation,
 +      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
-+
-+  StatusOr<Shape> GetShape(const GlobalData& data) const;
 +
 +  StatusOr<std::unique_ptr<ProgramShape>> GetComputationShape(
 +      const XlaComputation& computation) const;
@@ -151,11 +149,6 @@ index 0000000000..f0f542d957
 +  return client_->TransferToServer(literal).ValueOrDie();
 +}
 +
-+StatusOr<Shape> XlaComputationClientImpl::GetShape(
-+    const GlobalData& data) const {
-+  return client_->GetShape(data);
-+}
-+
 +StatusOr<std::unique_ptr<ProgramShape>>
 +XlaComputationClientImpl::GetComputationShape(
 +    const XlaComputation& computation) const {
@@ -182,10 +175,6 @@ index 0000000000..f0f542d957
 +  return pImpl->ExecuteComputationAndTransfer(computation, arguments);
 +}
 +
-+StatusOr<Shape> XlaComputationClient::GetShape(const GlobalData& data) const {
-+  return pImpl->GetShape(data);
-+}
-+
 +StatusOr<std::unique_ptr<ProgramShape>>
 +XlaComputationClient::GetComputationShape(
 +    const XlaComputation& computation) const {
@@ -208,10 +197,10 @@ index 0000000000..f0f542d957
 +}  // namespace xla
 diff --git a/tensorflow/compiler/xla/rpc/computation_client.h b/tensorflow/compiler/xla/rpc/computation_client.h
 new file mode 100644
-index 0000000000..2a02b1b5ae
+index 0000000000..b163d14b1e
 --- /dev/null
 +++ b/tensorflow/compiler/xla/rpc/computation_client.h
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,42 @@
 +#ifndef TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +#define TENSORFLOW_COMPILER_XLA_RPC_COMPUTATION_CLIENT_H_
 +
@@ -240,8 +229,6 @@ index 0000000000..2a02b1b5ae
 +  std::unique_ptr<Literal> ExecuteComputationAndTransfer(
 +      const XlaComputation& computation,
 +      tensorflow::gtl::ArraySlice<GlobalData*> arguments) const;
-+
-+  StatusOr<Shape> GetShape(const GlobalData& data) const;
 +
 +  StatusOr<std::unique_ptr<ProgramShape>> GetComputationShape(
 +      const XlaComputation& computation) const;
