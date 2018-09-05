@@ -138,9 +138,8 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
       AT_ERROR("Failed to build XlaComputation");
     }
     forward_graph_ = std::move(*maybe_computation);
-    const auto program_shape =
-        client_->GetComputationShape(forward_graph_).ValueOrDie();
-    const auto result_shape = program_shape->result();
+    const auto program_shape = forward_graph_.GetProgramShape().ValueOrDie();
+    const auto result_shape = program_shape.result();
     if (xla::ShapeUtil::IsTuple(result_shape)) {
       for (const auto& element_shape : result_shape.tuple_shapes()) {
         forward_ret_shape_cache_.push_back(element_shape);
@@ -237,9 +236,8 @@ void XlaModule::backward(
       AT_ERROR("Failed to build backward XlaComputation");
     }
     backward_graph_ = std::move(*maybe_computation);
-    const auto program_shape =
-        client_->GetComputationShape(backward_graph_).ValueOrDie();
-    const auto result_shape = program_shape->result();
+    const auto program_shape = backward_graph_.GetProgramShape().ValueOrDie();
+    const auto result_shape = program_shape.result();
     if (xla::ShapeUtil::IsTuple(result_shape)) {
       for (const auto& element_shape : result_shape.tuple_shapes()) {
         backward_ret_shape_cache_.push_back(element_shape);
