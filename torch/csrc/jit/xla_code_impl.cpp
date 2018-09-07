@@ -1328,10 +1328,12 @@ at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
         CHECK_GE(node->inputs().size(), 1);
         CHECK_GE(node->outputs().size(), 1);
         xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
+        const auto xla_output_rank1 = to_rank1(xla_output, {}, &b);
         const auto node_outputs = node->outputs();
         CHECK_GE(node_outputs.size(), 1);
         const auto current_unique = node_outputs[0]->unique();
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, xla_output_rank1);
         CHECK(it_ok.second);
         break;
       }
