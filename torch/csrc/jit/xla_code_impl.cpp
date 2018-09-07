@@ -1384,8 +1384,10 @@ at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
       case aten::threshold: {
         CHECK_EQ(node->inputs().size(), 3);
         xla::XlaOp xla_output = build_threshold(node, *XLA_OP(0), &b);
+        const auto xla_output_rank1 = to_rank1(xla_output, {}, &b);
         const auto current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, xla_output_rank1);
         CHECK(it_ok.second);
         break;
       }
