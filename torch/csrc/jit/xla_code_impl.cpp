@@ -1224,7 +1224,9 @@ at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
           xla_output = build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
         }
         const auto current_unique = output_id(node);
-        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        const auto xla_output_rank1 = to_rank1(xla_output, {}, &b);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, xla_output_rank1);
         CHECK(it_ok.second);
         break;
       }
