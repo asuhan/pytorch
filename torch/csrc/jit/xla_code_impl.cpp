@@ -1454,8 +1454,9 @@ at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
             build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
         const auto node_outputs = node->outputs();
         {
+          const auto output_rank1 = to_rank1(outputs.output, {}, &b);
           const auto it_ok =
-              node_xla_ops.emplace(node_outputs[0]->unique(), outputs.output);
+              node_xla_ops.emplace(node_outputs[0]->unique(), output_rank1);
           CHECK(it_ok.second);
         }
         if (node->kind() == aten::batch_norm) {
