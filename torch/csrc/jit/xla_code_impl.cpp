@@ -1355,8 +1355,9 @@ at::optional<XlaComputationResult> XlaCodeImpl::buildXlaComputation(
           return at::nullopt;
         }
         const auto current_unique = output_id(node);
+        const auto xla_output_rank1 = to_rank1(*xla_output_maybe, {}, &b);
         const auto it_ok =
-            node_xla_ops.emplace(current_unique, *xla_output_maybe);
+            node_xla_ops.emplace(current_unique, xla_output_rank1);
         CHECK(it_ok.second);
         break;
       }
