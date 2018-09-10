@@ -13,10 +13,23 @@ std::vector<int64> xla_i64_list(const at::IntList& input) {
   return output;
 }
 
+std::vector<int64> make_4d_layout(
+    const at::IntList& tensor_dimensions,
+    const xla::PrimitiveType type) {
+  if (tensor_dimensions.size() != 4) {
+    return {};
+  }
+  return {0, 1, 3, 2};
+}
+
 xla::Shape make_xla_shape(
     const at::IntList& tensor_dimensions,
     const xla::PrimitiveType type) {
   const auto dimensions = xla_i64_list(tensor_dimensions);
+  const auto asc_layout = make_4d_layout(tensor_dimensions, type);
+  if (!asc_layout.empty()) {
+    return xla::ShapeUtil::MakeShapeWithLayout(type, dimensions, asc_layout);
+  }
   std::vector<int64> layout(dimensions.size());
   // XLA uses minor-to-major.
   std::iota(layout.rbegin(), layout.rend(), 0);
@@ -37,35 +50,31 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
 }
 
 template <class NativeT>
-void linearize_tensor(
+std::vector<NativeT> linearize_tensor(
     const at::Tensor& t,
-    const size_t total_elements,
-    void* literal_buffer);
+    const size_t total_elements);
 
 template <>
-void linearize_tensor<float>(
+std::vector<float> linearize_tensor<float>(
     const at::Tensor& t,
-    const size_t total_elements,
-    void* literal_buffer) {
+    const size_t total_elements) {
   JIT_ASSERT(
       t.is_contiguous()); // the logic below works only for contiguous Tensors
-  std::copy(
-      t.data<float>(),
-      t.data<float>() + total_elements,
-      static_cast<float*>(literal_buffer));
+  std::vector<float> values(total_elements);
+  std::copy(t.data<float>(), t.data<float>() + total_elements, values.begin());
+  return values;
 }
 
 template <>
-void linearize_tensor<int64>(
+std::vector<int64> linearize_tensor<int64>(
     const at::Tensor& t,
-    const size_t total_elements,
-    void* literal_buffer) {
+    const size_t total_elements) {
   JIT_ASSERT(
       t.is_contiguous()); // the logic below works only for contiguous Tensors
+  std::vector<int64> values(total_elements);
   std::copy(
-      t.data<int64_t>(),
-      t.data<int64_t>() + total_elements,
-      static_cast<int64_t*>(literal_buffer));
+      t.data<int64_t>(), t.data<int64_t>() + total_elements, values.begin());
+  return values;
 }
 
 template <class NativeT>
@@ -73,13 +82,17 @@ std::unique_ptr<xla::GlobalData> tensor_to_xla_impl(
     const at::Tensor& param_tensor,
     const xla::Shape& param_shape,
     const xla::XlaComputationClient* client) {
+  std::vector<int64> dimension_sizes;
   size_t total_elements = 1;
   for (const auto dimension_size : param_tensor.sizes()) {
+    dimension_sizes.push_back(dimension_size);
     total_elements *= dimension_size;
   }
+  xla::Array<NativeT> parameter_xla_array(dimension_sizes);
+  parameter_xla_array.SetValues(
+      linearize_tensor<NativeT>(param_tensor, total_elements));
   xla::Literal literal(param_shape);
-  linearize_tensor<NativeT>(
-      param_tensor, total_elements, literal.data<NativeT>().data());
+  literal.PopulateFromArray(parameter_xla_array);
   return client->TransferParameterToServer(literal);
 }
 
@@ -255,8 +268,18 @@ void XLATensor::mulAddMulti(
   xla::Tuple(&b, new_dest_tuple);
   auto computation = b.Build().ValueOrDie();
   auto client = XlaGetClient();
+  auto program_shape = computation.GetProgramShape().ValueOrDie();
+  const auto result_shape = program_shape.result();
+  std::vector<xla::Shape> result_elements;
+  for (const auto& element_shape : result_shape.tuple_shapes()) {
+    std::vector<int64_t> element_dimensions(
+        element_shape.dimensions().begin(), element_shape.dimensions().end());
+    result_elements.push_back(
+        make_xla_shape(element_dimensions, element_shape.element_type()));
+  }
+  auto mul_add_multi_shape = xla::ShapeUtil::MakeTupleShape(result_elements);
   auto result_tuple =
-      client->ExecuteComputation(computation, input_data, nullptr);
+      client->ExecuteComputation(computation, input_data, &mul_add_multi_shape);
   auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
   setMultiFromResult(dest_tuple, new_dest_elements);
 }
@@ -274,8 +297,19 @@ void XLATensor::zeroMulti(
   }
   xla::Tuple(&b, new_dest_tuple);
   auto computation = b.Build().ValueOrDie();
+  auto program_shape = computation.GetProgramShape().ValueOrDie();
+  const auto result_shape = program_shape.result();
+  std::vector<xla::Shape> result_elements;
+  for (const auto& element_shape : result_shape.tuple_shapes()) {
+    std::vector<int64_t> element_dimensions(
+        element_shape.dimensions().begin(), element_shape.dimensions().end());
+    result_elements.push_back(
+        make_xla_shape(element_dimensions, element_shape.element_type()));
+  }
+  auto zero_multi_shape = xla::ShapeUtil::MakeTupleShape(result_elements);
   auto client = XlaGetClient();
-  auto result_tuple = client->ExecuteComputation(computation, {}, nullptr);
+  auto result_tuple =
+      client->ExecuteComputation(computation, {}, &zero_multi_shape);
   auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
   setMultiFromResult(dest_tuple, new_dest_elements);
 }
