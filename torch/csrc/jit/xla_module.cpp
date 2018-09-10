@@ -102,6 +102,63 @@ XlaModule::XlaModule(
   df_ = gradient.df;
 }
 
+namespace {
+
+using int64 = long long;
+
+std::vector<int64> xla_i64_list(const at::IntList& input) {
+  std::vector<int64> output(input.size());
+  std::copy(input.begin(), input.end(), output.begin());
+  return output;
+}
+
+xla::Shape make_xla_shape(
+    const at::IntList& tensor_dimensions,
+    const xla::PrimitiveType type) {
+  const auto dimensions = xla_i64_list(tensor_dimensions);
+  int64 max_lane_dim = -1;
+  ssize_t max_lane_dim_idx = -1;
+  for (size_t i = 0; i < dimensions.size(); ++i) {
+    if (dimensions[i] % 128 == 0 && dimensions[i] > max_lane_dim) {
+      max_lane_dim = dimensions[i];
+      max_lane_dim_idx = i;
+    }
+  }
+  if (max_lane_dim_idx == -1) {
+    for (size_t i = 0; i < dimensions.size(); ++i) {
+      if (dimensions[i] % 8 == 0 && dimensions[i] > max_lane_dim) {
+        max_lane_dim = dimensions[i];
+        max_lane_dim_idx = i;
+      }
+    }
+  }
+  int64 max_sublane_dim = -1;
+  ssize_t max_sublane_dim_idx = -1;
+  for (int64 i = 0; i < static_cast<int64>(dimensions.size()); ++i) {
+    if (i != max_lane_dim_idx && dimensions[i] % 8 == 0 &&
+        dimensions[i] > max_sublane_dim) {
+      max_sublane_dim = dimensions[i];
+      max_sublane_dim_idx = i;
+    }
+  }
+  std::vector<int64> layout;
+  if (max_lane_dim_idx != -1) {
+    layout.push_back(max_lane_dim_idx);
+  }
+  if (max_sublane_dim_idx != -1) {
+    layout.push_back(max_sublane_dim_idx);
+  }
+  for (int64 i = 0; i < static_cast<int64>(dimensions.size()); ++i) {
+    if (i == max_lane_dim_idx || i == max_sublane_dim_idx) {
+      continue;
+    }
+    layout.push_back(i);
+  }
+  return xla::ShapeUtil::MakeShapeWithLayout(type, dimensions, layout);
+}
+
+} // namespace
+
 std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     const std::vector<std::shared_ptr<XLATensor>>& inputs) {
   XLATensor::applyOpsMulti(inputs);
@@ -142,10 +199,17 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     const auto result_shape = program_shape.result();
     if (xla::ShapeUtil::IsTuple(result_shape)) {
       for (const auto& element_shape : result_shape.tuple_shapes()) {
-        forward_ret_shape_cache_.push_back(element_shape);
+        std::vector<int64_t> element_dimensions(
+            element_shape.dimensions().begin(),
+            element_shape.dimensions().end());
+        forward_ret_shape_cache_.push_back(
+            make_xla_shape(element_dimensions, element_shape.element_type()));
       }
     } else {
-      forward_ret_shape_cache_.push_back(result_shape);
+      std::vector<int64_t> result_dimensions(
+          result_shape.dimensions().begin(), result_shape.dimensions().end());
+      forward_ret_shape_cache_.push_back(
+          make_xla_shape(result_dimensions, result_shape.element_type()));
     }
     forward_graph_initialized_ = true;
   }
@@ -154,8 +218,11 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
   for (auto p : inputs_params_buffers) {
     inputs_params_buffers_data.push_back(p->xlaData());
   }
-  auto result_dh =
-      client_->ExecuteComputation(forward_graph_, inputs_params_buffers_data);
+  auto forward_shape = forward_ret_shape_cache_.size() > 1
+      ? xla::ShapeUtil::MakeTupleShape(forward_ret_shape_cache_)
+      : forward_ret_shape_cache_[0];
+  auto result_dh = client_->ExecuteComputation(
+      forward_graph_, inputs_params_buffers_data, &forward_shape);
   std::vector<std::shared_ptr<XLATensor>> raw_outputs;
 
   std::vector<xla::Shape> forward_ret_shape;
@@ -240,10 +307,17 @@ void XlaModule::backward(
     const auto result_shape = program_shape.result();
     if (xla::ShapeUtil::IsTuple(result_shape)) {
       for (const auto& element_shape : result_shape.tuple_shapes()) {
-        backward_ret_shape_cache_.push_back(element_shape);
+        std::vector<int64_t> element_dimensions(
+            element_shape.dimensions().begin(),
+            element_shape.dimensions().end());
+        backward_ret_shape_cache_.push_back(
+            make_xla_shape(element_dimensions, element_shape.element_type()));
       }
     } else {
-      backward_ret_shape_cache_.push_back(result_shape);
+      std::vector<int64_t> result_dimensions(
+          result_shape.dimensions().begin(), result_shape.dimensions().end());
+      backward_ret_shape_cache_.push_back(
+          make_xla_shape(result_dimensions, result_shape.element_type()));
     }
     backward_graph_initialized_ = true;
   }
@@ -257,8 +331,11 @@ void XlaModule::backward(
     raw_grad_outputs_data.push_back(ptr);
   }
 
-  auto result_dh =
-      client_->ExecuteComputation(backward_graph_, raw_grad_outputs_data);
+  auto backward_shape = backward_ret_shape_cache_.size() > 1
+      ? xla::ShapeUtil::MakeTupleShape(backward_ret_shape_cache_)
+      : backward_ret_shape_cache_[0];
+  auto result_dh = client_->ExecuteComputation(
+      backward_graph_, raw_grad_outputs_data, &backward_shape);
 
   std::vector<std::shared_ptr<XLATensor>> grad_inputs;
   std::vector<xla::Shape> backward_ret_shape;

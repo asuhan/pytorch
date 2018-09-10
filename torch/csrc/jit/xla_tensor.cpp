@@ -255,7 +255,8 @@ void XLATensor::mulAddMulti(
   xla::Tuple(&b, new_dest_tuple);
   auto computation = b.Build().ValueOrDie();
   auto client = XlaGetClient();
-  auto result_tuple = client->ExecuteComputation(computation, input_data);
+  auto result_tuple =
+      client->ExecuteComputation(computation, input_data, nullptr);
   auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
   setMultiFromResult(dest_tuple, new_dest_elements);
 }
@@ -274,7 +275,7 @@ void XLATensor::zeroMulti(
   xla::Tuple(&b, new_dest_tuple);
   auto computation = b.Build().ValueOrDie();
   auto client = XlaGetClient();
-  auto result_tuple = client->ExecuteComputation(computation, {});
+  auto result_tuple = client->ExecuteComputation(computation, {}, nullptr);
   auto new_dest_elements = client->DeconstructTuple(*result_tuple).ValueOrDie();
   setMultiFromResult(dest_tuple, new_dest_elements);
 }
@@ -402,7 +403,8 @@ void XLATensorData::applyOps() {
   }
   auto computation = b_.Build().ValueOrDie();
   auto client = XlaGetClient();
-  xla_data_ = client->ExecuteComputation(computation, operations_params_);
+  xla_data_ =
+      client->ExecuteComputation(computation, operations_params_, nullptr);
   resetOperationsState();
 }
 
