@@ -9,11 +9,6 @@
 namespace torch {
 namespace jit {
 
-struct XlaExecutionStatus {
-  size_t pc_delta;
-  bool ok;
-};
-
 class XlaCodeImpl {
  public:
   XlaCodeImpl(const std::shared_ptr<Graph>& graph);
