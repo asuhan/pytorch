@@ -112,10 +112,28 @@ std::vector<int64> xla_i64_list(const at::IntList& input) {
   return output;
 }
 
+std::vector<int64> make_4d_layout(
+    const at::IntList& tensor_dimensions,
+    const xla::PrimitiveType type,
+    const bool swap_batch_and_feature) {
+  if (tensor_dimensions.size() != 4) {
+    return {};
+  }
+  return (swap_batch_and_feature && tensor_dimensions[1] % 128 == 0)
+      ? std::vector<int64>{1, 0, 3, 2}
+      : std::vector<int64>{0, 1, 3, 2};
+}
+
 xla::Shape make_xla_shape(
     const at::IntList& tensor_dimensions,
-    const xla::PrimitiveType type) {
+    const xla::PrimitiveType type,
+    const bool swap_batch_and_feature) {
   const auto dimensions = xla_i64_list(tensor_dimensions);
+  const auto asc_layout =
+      make_4d_layout(tensor_dimensions, type, swap_batch_and_feature);
+  if (!asc_layout.empty()) {
+    return xla::ShapeUtil::MakeShapeWithLayout(type, dimensions, asc_layout);
+  }
   int64 max_lane_dim = -1;
   ssize_t max_lane_dim_idx = -1;
   for (size_t i = 0; i < dimensions.size(); ++i) {
@@ -132,13 +150,11 @@ xla::Shape make_xla_shape(
       }
     }
   }
-  int64 max_sublane_dim = -1;
   ssize_t max_sublane_dim_idx = -1;
   for (int64 i = 0; i < static_cast<int64>(dimensions.size()); ++i) {
-    if (i != max_lane_dim_idx && dimensions[i] % 8 == 0 &&
-        dimensions[i] > max_sublane_dim) {
-      max_sublane_dim = dimensions[i];
+    if (i != max_lane_dim_idx && dimensions[i] % 8 == 0) {
       max_sublane_dim_idx = i;
+      break;
     }
   }
   std::vector<int64> layout;
@@ -202,14 +218,14 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
         std::vector<int64_t> element_dimensions(
             element_shape.dimensions().begin(),
             element_shape.dimensions().end());
-        forward_ret_shape_cache_.push_back(
-            make_xla_shape(element_dimensions, element_shape.element_type()));
+        forward_ret_shape_cache_.push_back(make_xla_shape(
+            element_dimensions, element_shape.element_type(), true));
       }
     } else {
       std::vector<int64_t> result_dimensions(
           result_shape.dimensions().begin(), result_shape.dimensions().end());
       forward_ret_shape_cache_.push_back(
-          make_xla_shape(result_dimensions, result_shape.element_type()));
+          make_xla_shape(result_dimensions, result_shape.element_type(), true));
     }
     forward_graph_initialized_ = true;
   }
@@ -310,14 +326,14 @@ void XlaModule::backward(
         std::vector<int64_t> element_dimensions(
             element_shape.dimensions().begin(),
             element_shape.dimensions().end());
-        backward_ret_shape_cache_.push_back(
-            make_xla_shape(element_dimensions, element_shape.element_type()));
+        backward_ret_shape_cache_.push_back(make_xla_shape(
+            element_dimensions, element_shape.element_type(), false));
       }
     } else {
       std::vector<int64_t> result_dimensions(
           result_shape.dimensions().begin(), result_shape.dimensions().end());
-      backward_ret_shape_cache_.push_back(
-          make_xla_shape(result_dimensions, result_shape.element_type()));
+      backward_ret_shape_cache_.push_back(make_xla_shape(
+          result_dimensions, result_shape.element_type(), false));
     }
     backward_graph_initialized_ = true;
   }
