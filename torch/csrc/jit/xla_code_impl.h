@@ -16,6 +16,14 @@ class XlaCodeImpl {
   at::optional<xla::XlaComputation> buildXlaComputation(
       const std::vector<xla::Shape>& parameter_shapes) const;
 
+  static at::optional<xla::XlaComputation> buildXlaComputation(
+      const Block* block,
+      const std::vector<xla::Shape>& parameter_shapes,
+      const std::map<size_t, xla::XlaOp>& init_node_xla_ops,
+      const std::vector<xla::XlaOp>& captured_inputs,
+      const at::optional<xla::XlaOp> iteration_counter,
+      xla::XlaBuilder* b);
+
   std::shared_ptr<Graph> graph_;
 };
 

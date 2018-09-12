@@ -532,6 +532,26 @@ class TestOptimizer(TestCase):
             self.checkSgd(lr=0.1, momentum=0.5, weight_decay=weight_decay, nsteps=1, do_zero_grad=True)
             self.checkSgd(lr=0.1, momentum=0.5, weight_decay=weight_decay, nsteps=2, do_zero_grad=False)
 
+class TestControlFlow(TestCase):
+    @staticmethod
+    def known_tripcount(a1, a2, b):
+        # type: (Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor]
+        for _ in range(5):
+            a1 = a1 + b
+            a2 = a2 + b
+        return (a1, a2)
+
+    def test_known_tripcount(self):
+        script_known_tripcount = torch.jit.script(TestControlFlow.known_tripcount)
+        a1 = torch.randn(3)
+        a2 = torch.randn(3)
+        b = torch.randn(3)
+        xla_script_known_tripcount = torch._C.XlaModule(script_known_tripcount, [a1, a2, b], backward=False)
+        xla_result1, xla_result2 = xla_script_known_tripcount(torch._C.XLATensor(a1), torch._C.XLATensor(a2), torch._C.XLATensor(b))
+        result1, result2 = TestControlFlow.known_tripcount(a1, a2, b)
+        self.assertEqual(result1, xla_result1.to_tensor())
+        self.assertEqual(result2, xla_result2.to_tensor())
+
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.FloatTensor')
     run_tests()
