@@ -9,7 +9,7 @@ import unittest
 def _xla_run(model, input):
     traced_model = torch.jit.trace(input)(model)
     input_xla = torch._C.XLATensor(input)
-    xla_model = torch._C.XlaModule(traced_model, [input], backward=True)
+    xla_model = torch._C.XlaModule(traced_model, [input], backward=False)
     output_xla = xla_model(input_xla)
     return output_xla.to_tensor()
 

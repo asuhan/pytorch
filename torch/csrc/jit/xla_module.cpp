@@ -58,6 +58,12 @@ XlaModule::XlaModule(
         std::make_shared<XLATensor>(autograd::as_variable_ref(*p)));
   }
 
+  if (!backward) {
+    f_real_outputs = fgraph->return_node()->inputs().size();
+    f_ = fgraph;
+    return;
+  }
+
   // if backward is true, differentiate graph
   std::vector<bool> inputs_require_grad;
   for (auto p : inputs) {

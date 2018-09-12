@@ -1213,7 +1213,8 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         } else {
           xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
         }
-        const auto current_unique = output_id(node);
+        const auto node_outputs = node->outputs();
+        const auto current_unique = node_outputs[0]->unique();
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
         break;
