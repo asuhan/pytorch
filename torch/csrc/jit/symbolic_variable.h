@@ -204,6 +204,14 @@ struct SymbolicVariable {
       grad.insertConstant(ceil_mode),
       grad.insertConstant(count_include_pad)})[0];
   }
+  static SymbolicVariable threshold_backward(const SymbolicVariable grad,
+                                             const SymbolicVariable input,
+                                             const double threshold,
+                                             const double value) {
+    return create(aten::threshold_backward, {
+      grad, input, grad.insertConstant(threshold),
+      grad.insertConstant(value)})[0];
+  }
 private:
   Value * insertConstant(IValue value) const {
     return v->owningGraph()->insertConstant(value);
