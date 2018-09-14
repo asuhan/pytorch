@@ -837,18 +837,22 @@ at::optional<xla::XlaOp> build_log_softmax_grad(
 xla::XlaOp build_threshold(
     const Node* node,
     const xla::XlaOp& input,
+    const xla::XlaOp& output,
+    const float threshold_scalar,
+    const float value_scalar,
     xla::XlaBuilder* b) {
   const auto node_inputs = node->inputs();
   const auto threshold_literal =
-      xla::LiteralUtil::CreateR0<float>(float_attr(node, attr::threshold));
+      xla::LiteralUtil::CreateR0<float>(threshold_scalar);
   const auto threshold = xla::ConstantLiteral(b, *threshold_literal);
-  const auto value_literal =
-      xla::LiteralUtil::CreateR0<float>(float_attr(node, attr::value));
+  const auto value_literal = xla::LiteralUtil::CreateR0<float>(value_scalar);
   const auto value = xla::ConstantLiteral(b, *value_literal);
   const auto input_sizes = tensor_sizes(node_inputs[0]);
   std::vector<int64> broadcast_sizes(input_sizes.begin(), input_sizes.end());
   return xla::Select(
-      xla::Gt(input, threshold), input, xla::Broadcast(value, broadcast_sizes));
+      xla::Gt(input, threshold),
+      output,
+      xla::Broadcast(value, broadcast_sizes));
 }
 
 at::optional<xla::XlaOp> build_view(
@@ -1320,7 +1324,27 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::threshold: {
         CHECK_EQ(node->inputs().size(), 3);
-        xla::XlaOp xla_output = build_threshold(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_threshold(
+            node,
+            *XLA_OP(0),
+            *XLA_OP(0),
+            float_attr(node, attr::threshold),
+            float_attr(node, attr::value),
+            &b);
+        const auto current_unique = output_id(node);
+        const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::threshold_backward: {
+        CHECK_EQ(node->inputs().size(), 4);
+        xla::XlaOp xla_output = build_threshold(
+            node,
+            *XLA_OP(1),
+            *XLA_OP(0),
+            float_attr(node, attr::threshold),
+            0,
+            &b);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);

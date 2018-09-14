@@ -245,10 +245,12 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       return {grads.at(0) * (1 - outputs.at(0) * outputs.at(0))};
 
     } else if (node->matches("aten::relu(Tensor self) -> Tensor")) {
-      return {grads.at(0) * (outputs.at(0) > at::Scalar(0)).type_as(outputs.at(0))};
+      return {SymbolicVariable::threshold_backward(grads.at(0), outputs.at(0),
+        0, 0)};
 
     } else if (node->matches("aten::threshold(Tensor self, Scalar threshold, Scalar value) -> Tensor")) {
-      return {grads.at(0) * (inputs.at(0) > at::Scalar(float_attr(node, attr::threshold))).type_as(outputs.at(0)), nullptr, nullptr};
+      return {SymbolicVariable::threshold_backward(grads.at(0), inputs.at(0),
+        float_attr(node, attr::threshold), 0)};
 
     } else if (node->matches("aten::exp(Tensor self) -> Tensor")) {
       return {grads.at(0) * (outputs.at(0))};
