@@ -21,7 +21,7 @@ index 97fcd37f6b..d65ee7ffc0 100644
 +            "-z defs",
 +            "-s",
 +            "-Wl,--version-script",  #  This line must be directly followed by the version_script.lds file
-+            "//tensorflow:tf_version_script.lds",
++            "tensorflow/tf_version_script.lds",
 +        ],
 +    }),
 +    deps = [
