@@ -25,6 +25,11 @@ class XlaCodeImpl {
       const std::vector<xla::Shape>& parameter_shapes,
       xla::XlaBuilder* b) const;
 
+  static std::pair<xla::XlaOp, xla::XlaOp> CrossEntropyWithLogits(
+      const xla::XlaOp& logits,
+      const xla::XlaOp& sparse_labels,
+      xla::XlaBuilder* b);
+
   std::shared_ptr<Graph> graph_;
 };
 

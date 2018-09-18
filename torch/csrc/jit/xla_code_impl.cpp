@@ -28,6 +28,16 @@ at::optional<xla::PrimitiveType> make_xla_primitive_type(
   }
 }
 
+xla::Shape make_xla_shape(
+    const at::IntList& tensor_dimensions,
+    const xla::PrimitiveType type) {
+  const auto dimensions = xla_i64_list(tensor_dimensions);
+  std::vector<int64> layout(dimensions.size());
+  // XLA uses minor-to-major.
+  std::iota(layout.rbegin(), layout.rend(), 0);
+  return xla::ShapeUtil::MakeShapeWithLayout(type, dimensions, layout);
+}
+
 } // namespace
 
 namespace torch {
@@ -1528,6 +1538,115 @@ at::optional<XlaComputationInOut> XlaCodeImpl::buildInlinedXlaComputation(
 }
 
 #undef XLA_OP
+
+namespace {
+
+xla::XlaOp OneHot(
+    xla::XlaBuilder* builder,
+    int64 depth,
+    int axis,
+    const at::IntList indices_shape,
+    const xla::XlaOp& indices,
+    const xla::XlaOp on_value,
+    const xla::XlaOp off_value) {
+  const int indices_dims = indices_shape.size();
+  const int output_dims = indices_dims + 1;
+
+  tensorflow::TensorShape output_shape(xla_i64_list(indices_shape));
+  output_shape.InsertDim(axis, depth);
+
+  // Build a Tensor populated with values 0, 1, 2, ... depth.
+  std::vector<int64> linspace_dims(output_dims, 1);
+  linspace_dims[axis] = depth;
+  tensorflow::TensorShape linspace_shape(linspace_dims);
+  tensorflow::Tensor linspace(tensorflow::DT_INT64, linspace_shape);
+  auto linspace_flat = linspace.flat<int64>();
+  for (int64 i = 0; i < depth; ++i) {
+    linspace_flat(i) = i;
+  }
+
+  std::vector<int64_t> linspace_dims_std(
+      linspace_dims.begin(), linspace_dims.end());
+  const auto linspace_xla_shape =
+      make_xla_shape(linspace_dims_std, xla::PrimitiveType::S64);
+  xla::BorrowingLiteral linspace_literal(
+      linspace.tensor_data().data(), linspace_xla_shape);
+
+  std::vector<int64> broadcast_dims(indices_shape.size());
+  std::iota(broadcast_dims.begin(), broadcast_dims.begin() + axis, 0);
+  std::iota(broadcast_dims.begin() + axis, broadcast_dims.end(), axis + 1);
+  xla::XlaOp linspace_xla;
+  xla::XlaOp one_hot_bool = xla::Eq(
+      indices, xla::ConstantLiteral(builder, linspace_literal), broadcast_dims);
+
+  // Selects the user-provided off_value and on_value values.
+  return xla::Select(
+      one_hot_bool,
+      xla::Broadcast(on_value, output_shape.dim_sizes()),
+      xla::Broadcast(off_value, output_shape.dim_sizes()));
+}
+
+} // namespace
+
+std::pair<xla::XlaOp, xla::XlaOp> XlaCodeImpl::CrossEntropyWithLogits(
+    const xla::XlaOp& logits,
+    const xla::XlaOp& sparse_labels,
+    xla::XlaBuilder* b) {
+  const int kBatchDim = 0;
+  const int kClassDim = 1;
+  const auto xla_type = xla::PrimitiveType::F32;
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto zero = xla::ConstantLiteral(b, *zero_literal);
+  const auto one_literal = xla::LiteralUtil::CreateR0<float>(1);
+  const auto one = xla::ConstantLiteral(b, *one_literal);
+  const auto logits_shape = b->GetShape(logits).ValueOrDie();
+  const auto labels = OneHot(
+      b,
+      logits_shape.dimensions(1),
+      1,
+      logits_shape.dimensions_size(),
+      sparse_labels,
+      one,
+      zero);
+  const auto max_func = CreateMaxComputation();
+  // Find the max in each batch, resulting in a tensor of shape [batch]
+  const auto min_literal = xla::LiteralUtil::MinValue(xla_type);
+  auto logits_max = xla::Reduce(
+      logits, xla::ConstantLiteral(b, min_literal), max_func, {kClassDim});
+
+  // Subtract the max in batch b from every element in batch b.
+  // Broadcasts along the batch dimension.
+  auto shifted_logits = xla::Sub(logits, logits_max, {kBatchDim});
+
+  // exp(logits - max_logits)
+  auto exp_shifted_logits = xla::Exp(shifted_logits);
+
+  // sum_{class} (exp(logits - max_logits))
+  const auto add_func = CreateAddComputation();
+  auto sum_exp = xla::Reduce(exp_shifted_logits, zero, add_func, {kClassDim});
+
+  // log(sum(exp(logits - max_logits)))
+  auto log_sum_exp = xla::Log(sum_exp);
+
+  // sum(-labels *
+  //    ((logits - max_logits) - log(sum(exp(logits - max_logits)))))
+  // along classes
+  // (The subtraction broadcasts along the batch dimension.)
+  auto sub = xla::Sub(shifted_logits, log_sum_exp, {kBatchDim});
+  auto mul = xla::Mul(xla::Neg(labels), sub);
+  auto loss = xla::Reduce(mul, zero, add_func, {kClassDim});
+  const auto loss_shape = b->GetShape(loss).ValueOrDie();
+
+  // backprop: prob - labels, where
+  //   prob = exp(logits - max_logits) / sum(exp(logits - max_logits))
+  //     (where the division broadcasts along the batch dimension)
+  xla::XlaOp backprop =
+      xla::Sub(xla::Div(exp_shifted_logits, sum_exp, {kBatchDim}), labels);
+  const auto batch_literal =
+      xla::LiteralUtil::CreateR0<float>(logits_shape.dimensions(0));
+  backprop = xla::Div(backprop, xla::ConstantLiteral(b, *batch_literal));
+  return {loss, backprop};
+}
 
 } // namespace jit
 } // namespace torch
