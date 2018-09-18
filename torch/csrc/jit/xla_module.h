@@ -20,6 +20,7 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   std::vector<std::shared_ptr<XLATensor>> forward(
       const std::vector<std::shared_ptr<XLATensor>>& inputs);
   void backward(const std::vector<std::shared_ptr<XLATensor>>& grad_outputs);
+  void train(const std::vector<std::shared_ptr<XLATensor>>& inputs);
 
   std::vector<std::shared_ptr<XLATensor>> parameters();
   std::vector<std::shared_ptr<XLATensor>> parameters_buffers();

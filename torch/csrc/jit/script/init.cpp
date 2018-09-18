@@ -620,6 +620,10 @@ void initJitScriptBindings(PyObject* module) {
 	auto inputs = createTensorList(args);
 	xla_module.backward(inputs);
       })
+    .def("train", [](XlaModule& xla_module, py::args args) {
+      auto inputs = createTensorList(args);
+      xla_module.train(inputs);
+    })
     .def("parameters", [](XlaModule& xla_module) {
 	return xla_module.parameters();
       })

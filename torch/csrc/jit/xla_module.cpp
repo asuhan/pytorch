@@ -352,6 +352,147 @@ void XlaModule::backward(
   captured_inputs_outputs_.clear();
 }
 
+void XlaModule::train(const std::vector<std::shared_ptr<XLATensor>>& inputs) {
+  XLATensor::applyOpsMulti(inputs);
+  XLATensor::applyOpsMulti(params_);
+  // clear the previous forward's captured vectors.
+  // This is needed in case backward is not yet run, but two forward calls were
+  // made
+  inputs_.clear();
+  captured_outputs_.clear();
+  captured_inputs_outputs_.clear();
+
+  inputs_ = inputs; // needed so that in backward, we can set .grad attributes
+                    // correctly
+
+  auto client = XlaGetClient();
+  std::vector<std::shared_ptr<XLATensor>> inputs_params_buffers;
+  for (auto p : inputs) {
+    inputs_params_buffers.push_back(p);
+  }
+  for (auto p : params_buffers_) {
+    inputs_params_buffers.push_back(p);
+  }
+
+  std::vector<xla::XlaOp> backward_operands;
+  // Lazy-convert forward graph to XlaComputation
+  if (!forward_graph_initialized_) {
+    std::vector<xla::Shape> forward_shapes;
+    for (auto p : inputs_params_buffers) {
+      forward_shapes.push_back(p->shape());
+    }
+
+    XlaCodeImpl xla_fwd_impl(f_);
+    xla::XlaBuilder b("xla_computation");
+    b.set_die_immediately_on_error(true);
+    auto computation_in_outs_maybe =
+        xla_fwd_impl.buildInlinedXlaComputation(forward_shapes, &b);
+    if (!computation_in_outs_maybe) {
+      AT_ERROR("Failed to build XlaComputation");
+    }
+    CHECK(!computation_in_outs_maybe->outputs.empty());
+    std::vector<xla::XlaOp> grad_outputs;
+    for (uint64_t i = 0; i < f_real_outputs; i++) {
+      grad_outputs.push_back(computation_in_outs_maybe->outputs[i]);
+    }
+    std::vector<xla::XlaOp> captured_outputs;
+    for (uint64_t i = f_real_outputs;
+         i < computation_in_outs_maybe->outputs.size();
+         i++) {
+      captured_outputs.push_back(computation_in_outs_maybe->outputs[i]);
+    }
+    std::vector<xla::XlaOp> captured_inputs_outputs;
+    for (auto i : df_input_captured_inputs) {
+      captured_inputs_outputs.push_back(computation_in_outs_maybe->inputs[i]);
+    }
+    for (auto i : df_input_captured_outputs) {
+      captured_inputs_outputs.push_back(computation_in_outs_maybe->outputs[i]);
+    }
+    std::vector<xla::Shape> backward_shapes;
+    std::vector<xla::XlaOp> backward_operands;
+    for (auto p : grad_outputs) {
+      backward_shapes.push_back(b.GetShape(p).ValueOrDie());
+      backward_operands.push_back(p);
+    }
+    for (auto p : captured_outputs) {
+      backward_shapes.emplace_back();
+    }
+    for (auto p : captured_inputs_outputs) {
+      backward_shapes.push_back(b.GetShape(p).ValueOrDie());
+      backward_operands.push_back(p);
+    }
+    XlaCodeImpl xla_bwd_impl(df_);
+    auto maybe_computation = xla_bwd_impl.buildXlaComputation(backward_shapes);
+    if (!maybe_computation) {
+      AT_ERROR("Failed to build backward XlaComputation");
+    }
+    const auto backward_call =
+        xla::Call(&b, *maybe_computation, backward_operands);
+    const auto result_shape = b.GetShape(backward_call).ValueOrDie();
+    if (xla::ShapeUtil::IsTuple(result_shape)) {
+      for (const auto& element_shape : result_shape.tuple_shapes()) {
+        std::vector<int64_t> element_dimensions(
+            element_shape.dimensions().begin(),
+            element_shape.dimensions().end());
+        backward_ret_shape_cache_.push_back(
+            make_xla_shape(element_dimensions, element_shape.element_type()));
+      }
+    } else {
+      std::vector<int64_t> result_dimensions(
+          result_shape.dimensions().begin(), result_shape.dimensions().end());
+      backward_ret_shape_cache_.push_back(
+          make_xla_shape(result_dimensions, result_shape.element_type()));
+    }
+    forward_graph_ = b.Build().ValueOrDie();
+    forward_graph_initialized_ = true;
+  }
+
+  std::vector<xla::GlobalData*> inputs_params_buffers_data;
+  for (auto p : inputs_params_buffers) {
+    inputs_params_buffers_data.push_back(p->xlaData());
+  }
+  auto backward_shape = backward_ret_shape_cache_.size() > 1
+      ? xla::ShapeUtil::MakeTupleShape(backward_ret_shape_cache_)
+      : backward_ret_shape_cache_[0];
+  auto result_dh = client->ExecuteComputation(
+      forward_graph_, inputs_params_buffers_data, &backward_shape);
+
+  std::vector<std::shared_ptr<XLATensor>> grad_inputs;
+  // convert tuples into vector of XLATensor
+  if (backward_ret_shape_cache_.size() > 1) {
+    auto tuple_elements = client->DeconstructTuple(*result_dh).ValueOrDie();
+    CHECK_EQ(backward_ret_shape_cache_.size(), tuple_elements.size());
+    for (size_t i = 0; i < tuple_elements.size(); ++i) {
+      auto& tuple_element = tuple_elements[i];
+      auto grad_input = std::make_shared<XLATensor>(
+          std::move(tuple_element), backward_ret_shape_cache_[i]);
+      grad_inputs.push_back(grad_input);
+    }
+  } else {
+    CHECK_EQ(backward_ret_shape_cache_.size(), size_t(1));
+    auto grad_input = std::make_shared<XLATensor>(
+        std::move(result_dh), backward_ret_shape_cache_[0]);
+    grad_inputs.push_back(grad_input);
+  }
+
+  JIT_ASSERT((inputs_.size() + params_.size()) == grad_inputs.size());
+
+  // now set .grad attributes of the input and param tensors
+  for (size_t i = 0; i < inputs_.size(); i++) {
+    inputs_[i]->setGrad(grad_inputs[i]);
+  }
+
+  for (size_t i = 0; i < params_.size(); i++) {
+    auto t = grad_inputs[i + inputs_.size()];
+    params_[i]->setGrad(t);
+  }
+
+  // release handles to saved / captured inputs and outputs
+  inputs_.clear();
+  captured_outputs_.clear();
+  captured_inputs_outputs_.clear();
+}
+
 std::vector<std::shared_ptr<XLATensor>> XlaModule::parameters() {
   return params_;
 }

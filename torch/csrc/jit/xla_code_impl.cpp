@@ -1129,14 +1129,33 @@ void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     const std::vector<xla::Shape>& parameter_shapes) const {
   xla::XlaBuilder b("xla_computation");
+  b.set_die_immediately_on_error(true);
+  const auto returned_tuple_maybe =
+      buildInlinedXlaComputation(parameter_shapes, &b);
+  if (!returned_tuple_maybe) {
+    return at::nullopt;
+  }
+  const auto returned_tuple = *returned_tuple_maybe;
+  if (returned_tuple.outputs.size() > 1) {
+    xla::Tuple(&b, returned_tuple.outputs);
+  } else {
+    // Ensure that the returned value is the root of the computation.
+    activate_return_node(returned_tuple.outputs[0], &b);
+  }
+  return b.Build().ValueOrDie();
+}
+
+at::optional<XlaComputationInOut> XlaCodeImpl::buildInlinedXlaComputation(
+    const std::vector<xla::Shape>& parameter_shapes,
+    xla::XlaBuilder* b) const {
   std::unordered_map<size_t, xla::XlaOp> node_xla_ops;
   std::unordered_set<size_t> undefined_inputs;
   std::unordered_set<size_t> all_zero_inputs;
+  std::vector<xla::XlaOp> input_ops;
 
   auto nodes = graph_->block()->nodes();
   const auto graph_inputs = graph_->inputs();
-  for (size_t parameter_number = 0, xla_parameter_number = 0;
-       parameter_number < graph_inputs.size();
+  for (size_t parameter_number = 0; parameter_number < graph_inputs.size();
        ++parameter_number) {
     Value* graph_input = graph_inputs[parameter_number];
     if (parameter_shapes[parameter_number].element_type() ==
@@ -1144,15 +1163,15 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       all_zero_inputs.emplace(graph_input->unique());
       continue;
     }
-    const auto it_ok = node_xla_ops.emplace(
-        graph_input->unique(),
-        xla::Parameter(
-            &b,
-            xla_parameter_number,
-            parameter_shapes[parameter_number],
-            "parameter_" + std::to_string(xla_parameter_number)));
+    const auto parameter_op = xla::Parameter(
+        b,
+        input_ops.size(),
+        parameter_shapes[parameter_number],
+        "parameter_" + std::to_string(input_ops.size()));
+    const auto it_ok =
+        node_xla_ops.emplace(graph_input->unique(), parameter_op);
     CHECK(it_ok.second);
-    ++xla_parameter_number;
+    input_ops.push_back(parameter_op);
   }
   for (auto node : nodes) {
     switch (node->kind()) {
@@ -1169,7 +1188,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           CHECK(node->kind() == aten::add);
           xla_output = *XLA_OP(1);
         } else {
-          xla_output = build_binary_op(node, *XLA_OP(0), *XLA_OP(1), &b);
+          xla_output = build_binary_op(node, *XLA_OP(0), *XLA_OP(1), b);
         }
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -1181,7 +1200,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
           LOG(INFO) << "Unsupported arity";
           return at::nullopt;
         }
-        xla::XlaOp xla_output = build_compare_op(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_compare_op(node, *XLA_OP(0), b);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1189,7 +1208,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::type_as: {
         CHECK_EQ(node->inputs().size(), 2);
-        const auto xla_output_maybe = build_type_as(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_type_as(node, *XLA_OP(0), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1209,9 +1228,9 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
         xla::XlaOp xla_output;
         if (XLA_OP(3)) { // bias exists
           xla_output = build_convolution_bias(
-              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(3), &b);
+              node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(3), b);
         } else {
-          xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), &b);
+          xla_output = build_convolution(node, *XLA_OP(0), *XLA_OP(1), b);
         }
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -1221,7 +1240,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::thnn_conv2d_backward: {
         CHECK_EQ(node->inputs().size(), 9);
         const auto conv2d_grads = build_thnn_conv2d_backward(
-            node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+            node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), b);
         const auto node_outputs = node->outputs();
         {
           const auto it_ok = node_xla_ops.emplace(
@@ -1270,7 +1289,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::max_pool2d_with_indices: {
         CHECK_GE(node->inputs().size(), 1);
         CHECK_GE(node->outputs().size(), 1);
-        xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_max_pool2d(node, *XLA_OP(0), b);
         const auto node_outputs = node->outputs();
         CHECK_GE(node_outputs.size(), 1);
         const auto current_unique = node_outputs[0]->unique();
@@ -1281,7 +1300,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::max_pool2d_with_indices_backward: {
         CHECK_EQ(node->inputs().size(), 8);
         xla::XlaOp xla_output =
-            build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
+            build_max_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), b);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1289,7 +1308,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::avg_pool2d: {
         CHECK_GE(node->inputs().size(), 1);
-        const auto xla_output_maybe = build_avg_pool2d(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_avg_pool2d(node, *XLA_OP(0), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1302,7 +1321,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::avg_pool2d_backward: {
         CHECK_GE(node->inputs().size(), 2);
         const auto xla_output_maybe =
-            build_avg_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), &b);
+            build_avg_pool2d_backward(node, *XLA_OP(0), *XLA_OP(1), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1315,7 +1334,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::relu: {
         CHECK_EQ(node->inputs().size(), 1);
         const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
-        const auto xla_zero = xla::ConstantLiteral(&b, *zero_literal);
+        const auto xla_zero = xla::ConstantLiteral(b, *zero_literal);
         xla::XlaOp xla_output = xla::Max(*XLA_OP(0), xla_zero);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
@@ -1330,7 +1349,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             *XLA_OP(0),
             float_attr(node, attr::threshold),
             float_attr(node, attr::value),
-            &b);
+            b);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1344,7 +1363,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             *XLA_OP(0),
             float_attr(node, attr::threshold),
             0,
-            &b);
+            b);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1352,7 +1371,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::log_softmax: {
         CHECK_EQ(node->inputs().size(), size_t(2));
-        const auto xla_output_maybe = build_log_softmax(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_log_softmax(node, *XLA_OP(0), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1365,7 +1384,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::log_softmax_backward_data: {
         CHECK_EQ(node->inputs().size(), 4);
         const auto xla_output_maybe =
-            build_log_softmax_grad(node, *XLA_OP(0), *XLA_OP(1), &b);
+            build_log_softmax_grad(node, *XLA_OP(0), *XLA_OP(1), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1377,7 +1396,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::view: {
         CHECK_EQ(node->inputs().size(), 2);
-        const auto xla_output_maybe = build_view(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_view(node, *XLA_OP(0), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1389,7 +1408,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::expand: {
         CHECK_GE(node->inputs().size(), 1);
-        xla::XlaOp xla_output = build_expand(node, *XLA_OP(0), &b);
+        xla::XlaOp xla_output = build_expand(node, *XLA_OP(0), b);
         const auto current_unique = output_id(node);
         const auto it_ok = node_xla_ops.emplace(current_unique, xla_output);
         CHECK(it_ok.second);
@@ -1398,7 +1417,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::stack: {
         CHECK_EQ(node->inputs().size(), 2);
         const auto xla_output_maybe =
-            build_stack(node, node_xla_ops, undefined_inputs, &b);
+            build_stack(node, node_xla_ops, undefined_inputs, b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1412,7 +1431,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       case aten::batch_norm: {
         CHECK_EQ(node->inputs().size(), 8);
         const auto outputs =
-            build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), &b);
+            build_batch_norm(node, *XLA_OP(0), *XLA_OP(1), *XLA_OP(2), b);
         const auto node_outputs = node->outputs();
         {
           const auto it_ok =
@@ -1447,7 +1466,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
             *XLA_OP(2), // weight
             *XLA_OP(7), // save_mean
             *XLA_OP(8), // save_std
-            &b);
+            b);
         const auto node_outputs = node->outputs();
         {
           const auto it_ok =
@@ -1468,7 +1487,7 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
       }
       case aten::sum: {
         CHECK_GE(node->inputs().size(), 1);
-        const auto xla_output_maybe = build_sum(node, *XLA_OP(0), &b);
+        const auto xla_output_maybe = build_sum(node, *XLA_OP(0), b);
         if (!xla_output_maybe) {
           return at::nullopt;
         }
@@ -1499,22 +1518,13 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     LOG(INFO) << "Unexpected end of graph";
     return at::nullopt;
   }
-  if (node_inputs.size() > 1) {
-    std::vector<xla::XlaOp> returned_tuple;
-    for (const auto return_input : node_inputs) {
-      const auto it = node_xla_ops.find(return_input->unique());
-      CHECK(it != node_xla_ops.end());
-      returned_tuple.push_back(it->second);
-    }
-    xla::Tuple(&b, returned_tuple);
-  } else {
-    const auto it = node_xla_ops.find(node_inputs[0]->unique());
+  std::vector<xla::XlaOp> returned_tuple;
+  for (const auto return_input : node_inputs) {
+    const auto it = node_xla_ops.find(return_input->unique());
     CHECK(it != node_xla_ops.end());
-    const auto ret = it->second;
-    // Ensure that the returned value is the root of the computation.
-    activate_return_node(ret, &b);
+    returned_tuple.push_back(it->second);
   }
-  return b.Build().ValueOrDie();
+  return XlaComputationInOut{input_ops, returned_tuple};
 }
 
 #undef XLA_OP

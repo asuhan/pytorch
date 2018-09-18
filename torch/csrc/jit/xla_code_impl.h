@@ -9,12 +9,21 @@
 namespace torch {
 namespace jit {
 
+struct XlaComputationInOut {
+  std::vector<xla::XlaOp> inputs;
+  std::vector<xla::XlaOp> outputs;
+};
+
 class XlaCodeImpl {
  public:
   XlaCodeImpl(const std::shared_ptr<Graph>& graph);
 
   at::optional<xla::XlaComputation> buildXlaComputation(
       const std::vector<xla::Shape>& parameter_shapes) const;
+
+  at::optional<XlaComputationInOut> buildInlinedXlaComputation(
+      const std::vector<xla::Shape>& parameter_shapes,
+      xla::XlaBuilder* b) const;
 
   std::shared_ptr<Graph> graph_;
 };
