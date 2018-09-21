@@ -45,6 +45,7 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   // TODO: captured_outputs only needs shape, no need for holding onto full
   // Tensor
   std::vector<std::shared_ptr<XLATensor>> inputs_;
+  std::vector<bool> inputs_require_grad_;
   std::vector<std::shared_ptr<XLATensor>> captured_outputs_;
   std::vector<std::shared_ptr<XLATensor>> captured_inputs_outputs_;
 

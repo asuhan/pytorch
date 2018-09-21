@@ -1100,6 +1100,118 @@ at::optional<xla::XlaOp> build_sum(
       xla_i64_list(int_list_attr(node, attr::dim)));
 }
 
+xla::XlaOp OneHot(
+    xla::XlaBuilder* builder,
+    int64 depth,
+    int axis,
+    const at::IntList indices_shape,
+    const xla::XlaOp& indices,
+    const xla::XlaOp on_value,
+    const xla::XlaOp off_value) {
+  const int indices_dims = indices_shape.size();
+  const int output_dims = indices_dims + 1;
+
+  tensorflow::TensorShape output_shape(xla_i64_list(indices_shape));
+  output_shape.InsertDim(axis, depth);
+
+  // Build a Tensor populated with values 0, 1, 2, ... depth.
+  std::vector<int64> linspace_dims(output_dims, 1);
+  linspace_dims[axis] = depth;
+  tensorflow::TensorShape linspace_shape(linspace_dims);
+  tensorflow::Tensor linspace(tensorflow::DT_INT64, linspace_shape);
+  auto linspace_flat = linspace.flat<int64>();
+  for (int64 i = 0; i < depth; ++i) {
+    linspace_flat(i) = i;
+  }
+
+  std::vector<int64_t> linspace_dims_std(
+      linspace_dims.begin(), linspace_dims.end());
+  const auto linspace_xla_shape =
+      make_xla_shape(linspace_dims_std, xla::PrimitiveType::S64);
+  xla::BorrowingLiteral linspace_literal(
+      linspace.tensor_data().data(), linspace_xla_shape);
+
+  std::vector<int64> broadcast_dims(indices_shape.size());
+  std::iota(broadcast_dims.begin(), broadcast_dims.begin() + axis, 0);
+  std::iota(broadcast_dims.begin() + axis, broadcast_dims.end(), axis + 1);
+  xla::XlaOp linspace_xla;
+  xla::XlaOp one_hot_bool = xla::Eq(
+      indices, xla::ConstantLiteral(builder, linspace_literal), broadcast_dims);
+
+  // Selects the user-provided off_value and on_value values.
+  return xla::Select(
+      one_hot_bool,
+      xla::Broadcast(on_value, output_shape.dim_sizes()),
+      xla::Broadcast(off_value, output_shape.dim_sizes()));
+}
+
+at::optional<xla::XlaOp> build_nll_loss(
+    const Node* node,
+    const xla::XlaOp& logits,
+    const xla::XlaOp& sparse_labels,
+    const std::unordered_set<size_t>& undefined_inputs) {
+  const int kBatchDim = 0;
+  auto builder = logits.builder();
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto zero = xla::ConstantLiteral(builder, *zero_literal);
+  const auto one_literal = xla::LiteralUtil::CreateR0<float>(1);
+  const auto one = xla::ConstantLiteral(builder, *one_literal);
+  const auto logits_shape = builder->GetShape(logits).ValueOrDie();
+  const auto sparse_labels_shape =
+      builder->GetShape(sparse_labels).ValueOrDie();
+  std::vector<int64_t> sparse_labels_dims(
+      sparse_labels_shape.dimensions().begin(),
+      sparse_labels_shape.dimensions().end());
+  const auto labels = OneHot(
+      builder,
+      logits_shape.dimensions(1),
+      1,
+      sparse_labels_dims,
+      sparse_labels,
+      one,
+      zero);
+  auto mul = xla::Mul(xla::Neg(labels), logits);
+  const auto add_func = CreateAddComputation();
+  std::vector<int64> logits_dimension_indices(logits_shape.dimensions_size());
+  const auto batch_value = logits_shape.dimensions(kBatchDim);
+  const auto batch_literal = xla::LiteralUtil::CreateR0<float>(batch_value);
+  const auto batch = xla::ConstantLiteral(builder, *batch_literal);
+  std::iota(
+      logits_dimension_indices.begin(), logits_dimension_indices.end(), 0);
+  return xla::Reduce(mul, zero, add_func, logits_dimension_indices) / batch;
+}
+
+at::optional<xla::XlaOp> build_nll_loss_backward(
+    const Node* node,
+    const xla::XlaOp& logits,
+    const xla::XlaOp& sparse_labels,
+    const std::unordered_set<size_t>& undefined_inputs) {
+  const int kBatchDim = 0;
+  auto builder = logits.builder();
+  const auto zero_literal = xla::LiteralUtil::CreateR0<float>(0);
+  const auto zero = xla::ConstantLiteral(builder, *zero_literal);
+  const auto one_literal = xla::LiteralUtil::CreateR0<float>(1);
+  const auto one = xla::ConstantLiteral(builder, *one_literal);
+  const auto logits_shape = builder->GetShape(logits).ValueOrDie();
+  const auto sparse_labels_shape =
+      builder->GetShape(sparse_labels).ValueOrDie();
+  std::vector<int64_t> sparse_labels_dims(
+      sparse_labels_shape.dimensions().begin(),
+      sparse_labels_shape.dimensions().end());
+  const auto labels = OneHot(
+      builder,
+      logits_shape.dimensions(1),
+      1,
+      sparse_labels_dims,
+      sparse_labels,
+      one,
+      zero);
+  const auto batch_value = logits_shape.dimensions(kBatchDim);
+  const auto batch_literal = xla::LiteralUtil::CreateR0<float>(batch_value);
+  const auto batch = xla::ConstantLiteral(builder, *batch_literal);
+  return xla::Neg(labels) / batch;
+}
+
 at::optional<const xla::XlaOp&> xla_op_for_input(
     const Node* node,
     const size_t input_index,
@@ -1507,6 +1619,32 @@ at::optional<XlaComputationInOut> XlaCodeImpl::buildInlinedXlaComputation(
         CHECK(it_ok.second);
         break;
       }
+      case aten::nll_loss: {
+        CHECK_EQ(node->inputs().size(), 5);
+        const auto xla_output_maybe =
+            build_nll_loss(node, *XLA_OP(0), *XLA_OP(1), undefined_inputs);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        const auto current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
+        CHECK(it_ok.second);
+        break;
+      }
+      case aten::nll_loss_backward: {
+        CHECK_EQ(node->inputs().size(), 7);
+        const auto xla_output_maybe = build_nll_loss_backward(
+            node, *XLA_OP(1), *XLA_OP(2), undefined_inputs);
+        if (!xla_output_maybe) {
+          return at::nullopt;
+        }
+        const auto current_unique = output_id(node);
+        const auto it_ok =
+            node_xla_ops.emplace(current_unique, *xla_output_maybe);
+        CHECK(it_ok.second);
+        break;
+      }
       case prim::Constant:
       case prim::ListConstruct: {
         break;
@@ -1538,55 +1676,6 @@ at::optional<XlaComputationInOut> XlaCodeImpl::buildInlinedXlaComputation(
 }
 
 #undef XLA_OP
-
-namespace {
-
-xla::XlaOp OneHot(
-    xla::XlaBuilder* builder,
-    int64 depth,
-    int axis,
-    const at::IntList indices_shape,
-    const xla::XlaOp& indices,
-    const xla::XlaOp on_value,
-    const xla::XlaOp off_value) {
-  const int indices_dims = indices_shape.size();
-  const int output_dims = indices_dims + 1;
-
-  tensorflow::TensorShape output_shape(xla_i64_list(indices_shape));
-  output_shape.InsertDim(axis, depth);
-
-  // Build a Tensor populated with values 0, 1, 2, ... depth.
-  std::vector<int64> linspace_dims(output_dims, 1);
-  linspace_dims[axis] = depth;
-  tensorflow::TensorShape linspace_shape(linspace_dims);
-  tensorflow::Tensor linspace(tensorflow::DT_INT64, linspace_shape);
-  auto linspace_flat = linspace.flat<int64>();
-  for (int64 i = 0; i < depth; ++i) {
-    linspace_flat(i) = i;
-  }
-
-  std::vector<int64_t> linspace_dims_std(
-      linspace_dims.begin(), linspace_dims.end());
-  const auto linspace_xla_shape =
-      make_xla_shape(linspace_dims_std, xla::PrimitiveType::S64);
-  xla::BorrowingLiteral linspace_literal(
-      linspace.tensor_data().data(), linspace_xla_shape);
-
-  std::vector<int64> broadcast_dims(indices_shape.size());
-  std::iota(broadcast_dims.begin(), broadcast_dims.begin() + axis, 0);
-  std::iota(broadcast_dims.begin() + axis, broadcast_dims.end(), axis + 1);
-  xla::XlaOp linspace_xla;
-  xla::XlaOp one_hot_bool = xla::Eq(
-      indices, xla::ConstantLiteral(builder, linspace_literal), broadcast_dims);
-
-  // Selects the user-provided off_value and on_value values.
-  return xla::Select(
-      one_hot_bool,
-      xla::Broadcast(on_value, output_shape.dim_sizes()),
-      xla::Broadcast(off_value, output_shape.dim_sizes()));
-}
-
-} // namespace
 
 std::pair<xla::XlaOp, xla::XlaOp> XlaCodeImpl::CrossEntropyWithLogits(
     const xla::XlaOp& logits,

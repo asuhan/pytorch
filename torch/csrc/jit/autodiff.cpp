@@ -109,7 +109,8 @@ bool isDifferentiable(Node * n) {
     "aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, int ceil_mode) -> (Tensor, Tensor)",
     "aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)",
     "aten::thnn_batch_norm_forward(Tensor self, Tensor weight, Tensor bias, Tensor running_mean, Tensor running_var, int training, float momentum, float eps) -> (Tensor, Tensor, Tensor)",
-    "aten::log_softmax(Tensor self, int dim) -> Tensor"
+    "aten::log_softmax(Tensor self, int dim) -> Tensor",
+    "aten::nll_loss(Tensor self, Tensor target, Tensor weight, int reduction, int ignore_index) -> Tensor"
   };
 
   if (n->kind() == prim::Constant || n->kind() == prim::AutogradAdd)
@@ -453,6 +454,24 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       thisNode->addInput(outputs.at(0));
       thisNode->addInput(inputs.at(1));
       thisNode->addInput(inputs.at(0));
+      graph->insertNode(thisNode);
+      return fmap<SymbolicVariable>(thisNode->outputs());
+
+    } else if (node->matches("aten::nll_loss(Tensor self, Tensor target, Tensor weight, int reduction, int ignore_index) -> Tensor")) {
+      auto graph = node->owningGraph();
+      auto thisNode = graph->create(aten::nll_loss_backward);
+      auto grad_out = grads.at(0);
+      thisNode->addInput(grad_out);
+      thisNode->addInput(inputs.at(0));
+      thisNode->addInput(inputs.at(1));
+      // TODO(asuhan): should be inputs.at(2), but if it's undefined we'd leak
+      // it from the forward trace and we don't support that yet.
+      auto weight = graph->insertNode(graph->createUndefined());
+      thisNode->addInput(weight->output());
+      thisNode->addInput(inputs.at(3));
+      thisNode->addInput(inputs.at(4));
+      auto total_weight = graph->insertNode(graph->createUndefined());
+      thisNode->addInput(total_weight->output());
       graph->insertNode(thisNode);
       return fmap<SymbolicVariable>(thisNode->outputs());
 

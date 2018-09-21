@@ -59,9 +59,8 @@ XlaModule::XlaModule(
   }
 
   // if backward is true, differentiate graph
-  std::vector<bool> inputs_require_grad;
   for (auto p : inputs) {
-    inputs_require_grad.push_back(p.requires_grad());
+    inputs_require_grad_.push_back(p.requires_grad());
   }
 
   for (uint32_t i = 0; i < params_buffers_.size(); i++) {
@@ -71,12 +70,12 @@ XlaModule::XlaModule(
   }
 
   for (auto buf : is_buffer_) {
-    inputs_require_grad.push_back(!buf);
+    inputs_require_grad_.push_back(!buf);
   }
 
   // symbolically differentiate graph to get backward graph
   auto fgraph_copy = fgraph->copy();
-  Gradient gradient = differentiate(fgraph_copy, inputs_require_grad);
+  Gradient gradient = differentiate(fgraph_copy, inputs_require_grad_);
 
   // run forward passes
   DecomposeAddmm(gradient.f);
@@ -334,16 +333,19 @@ void XlaModule::backward(
     grad_inputs.push_back(grad_input);
   }
 
-  JIT_ASSERT((inputs_.size() + params_.size()) == grad_inputs.size());
-
   // now set .grad attributes of the input and param tensors
+  JIT_ASSERT(inputs_require_grad_.size() >= inputs_.size() + params_.size());
+  size_t grad_index = 0;
   for (size_t i = 0; i < inputs_.size(); i++) {
-    inputs_[i]->setGrad(grad_inputs[i]);
+    if (inputs_require_grad_[i]) {
+      inputs_[i]->setGrad(grad_inputs[grad_index]);
+      ++grad_index;
+    }
   }
 
   for (size_t i = 0; i < params_.size(); i++) {
-    auto t = grad_inputs[i + inputs_.size()];
-    params_[i]->setGrad(t);
+    params_[i]->setGrad(grad_inputs[grad_index]);
+    ++grad_index;
   }
 
   // release handles to saved / captured inputs and outputs
@@ -475,16 +477,19 @@ void XlaModule::train(const std::vector<std::shared_ptr<XLATensor>>& inputs) {
     grad_inputs.push_back(grad_input);
   }
 
-  JIT_ASSERT((inputs_.size() + params_.size()) == grad_inputs.size());
-
   // now set .grad attributes of the input and param tensors
+  JIT_ASSERT(inputs_require_grad_.size() >= inputs_.size() + params_.size());
+  size_t grad_index = 0;
   for (size_t i = 0; i < inputs_.size(); i++) {
-    inputs_[i]->setGrad(grad_inputs[i]);
+    if (inputs_require_grad_[i]) {
+      inputs_[i]->setGrad(grad_inputs[grad_index]);
+      ++grad_index;
+    }
   }
 
   for (size_t i = 0; i < params_.size(); i++) {
-    auto t = grad_inputs[i + inputs_.size()];
-    params_[i]->setGrad(t);
+    params_[i]->setGrad(grad_inputs[grad_index]);
+    ++grad_index;
   }
 
   // release handles to saved / captured inputs and outputs

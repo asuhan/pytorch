@@ -27,6 +27,26 @@ def _backward_passes(graph):
     torch._C._jit_pass_constant_fold(graph)
     torch._C._jit_pass_dce(graph)
 
+class TestNllLoss(TestCase):
+    def test(self):
+        class XlaNllLoss(nn.Module):
+            def __init__(self):
+                super(XlaNllLoss, self).__init__()
+                self.nll_loss = nn.NLLLoss()
+
+            def forward(self, x, labels):
+                return self.nll_loss(x, labels)
+
+        input = torch.randn(3, 5, requires_grad=True)
+        target = torch.empty(3, dtype=torch.long).random_(5)
+        model = XlaNllLoss()
+        traced_model = torch.jit.trace(input, target)(model)
+        xla_model = torch._C.XlaModule(traced_model, [input, target], backward=True)
+        output_xla = xla_model(torch._C.XLATensor(input), torch._C.XLATensor(target))
+        expected = model(input, target)
+        self.assertEqual(output_xla.to_tensor().data, expected.data)
+
+
 class TestMulAdd(TestCase):
     def test(self):
 
