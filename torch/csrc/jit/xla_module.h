@@ -20,12 +20,16 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
   std::vector<std::shared_ptr<XLATensor>> forward(
       const std::vector<std::shared_ptr<XLATensor>>& inputs);
   void backward(const std::vector<std::shared_ptr<XLATensor>>& grad_outputs);
-  void train(const std::vector<std::shared_ptr<XLATensor>>& inputs);
+  std::vector<std::shared_ptr<XLATensor>> train(
+      const std::vector<std::shared_ptr<XLATensor>>& inputs);
 
   std::vector<std::shared_ptr<XLATensor>> parameters();
   std::vector<std::shared_ptr<XLATensor>> parameters_buffers();
 
  private:
+  std::vector<std::shared_ptr<XLATensor>> doForward(
+      const std::vector<std::shared_ptr<XLATensor>>& inputs);
+
   std::vector<bool> is_buffer_;
   std::vector<std::shared_ptr<XLATensor>> params_;
   std::vector<std::shared_ptr<XLATensor>> params_buffers_;
@@ -51,6 +55,9 @@ struct XlaModule : public std::enable_shared_from_this<XlaModule> {
 
   std::vector<xla::Shape> forward_ret_shape_cache_;
   std::vector<xla::Shape> backward_ret_shape_cache_;
+  std::vector<std::shared_ptr<XLATensor>> grad_inputs_;
+  const bool backward_;
+  bool prefer_fused_traces_;
 };
 
 } // namespace jit

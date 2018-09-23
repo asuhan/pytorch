@@ -10,12 +10,16 @@ namespace torch {
 namespace jit {
 
 class XLATensorData;
+class XlaModule;
 
 class XLATensor : public std::enable_shared_from_this<XLATensor> {
  public:
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensor);
   XLATensor(const autograd::Variable&);
-  XLATensor(std::unique_ptr<xla::GlobalData>, const xla::Shape& shape);
+  XLATensor(
+      std::unique_ptr<xla::GlobalData>,
+      const xla::Shape& shape,
+      const XlaModule* module);
 
   virtual at::Tensor toTensor();
 
@@ -30,6 +34,8 @@ class XLATensor : public std::enable_shared_from_this<XLATensor> {
   virtual std::vector<int64_t> size() const;
 
   virtual xla::GlobalData* xlaData() const;
+
+  virtual const XlaModule* forwardModule() const;
 
   // Basic tensor operations used by the optimizers.
   virtual void add_(XLATensor& other, const at::Scalar& alpha);
@@ -76,7 +82,10 @@ class XLATensorData : public XLATensor {
  public:
   TH_DISALLOW_COPY_AND_ASSIGN(XLATensorData);
   XLATensorData(const autograd::Variable&);
-  XLATensorData(std::unique_ptr<xla::GlobalData>, const xla::Shape& shape);
+  XLATensorData(
+      std::unique_ptr<xla::GlobalData>,
+      const xla::Shape& shape,
+      const XlaModule* module);
 
   at::Tensor toTensor() override;
 
@@ -86,6 +95,7 @@ class XLATensorData : public XLATensor {
   xla::Shape shape() const override;
   std::vector<int64_t> size() const override;
   xla::GlobalData* xlaData() const override;
+  const XlaModule* forwardModule() const override;
 
   // Basic tensor operations used by the optimizers.
   void add_(XLATensor& other, const at::Scalar& alpha) override;
@@ -108,6 +118,7 @@ class XLATensorData : public XLATensor {
   at::optional<xla::XlaOp> operations_;
   xla::XlaBuilder b_;
   std::vector<xla::GlobalData*> operations_params_;
+  const XlaModule* module_;
 
   friend class XLATensor;
 };

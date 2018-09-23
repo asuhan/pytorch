@@ -19,7 +19,8 @@ class XlaCodeImpl {
   XlaCodeImpl(const std::shared_ptr<Graph>& graph);
 
   at::optional<xla::XlaComputation> buildXlaComputation(
-      const std::vector<xla::Shape>& parameter_shapes) const;
+      const std::vector<xla::Shape>& parameter_shapes,
+      size_t param_to_return_count) const;
 
   at::optional<XlaComputationInOut> buildInlinedXlaComputation(
       const std::vector<xla::Shape>& parameter_shapes,

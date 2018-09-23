@@ -1249,7 +1249,8 @@ void activate_return_node(const xla::XlaOp& ret, xla::XlaBuilder* b) {
   xla_op_for_input(node, input_index, node_xla_ops, undefined_inputs)
 
 at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
-    const std::vector<xla::Shape>& parameter_shapes) const {
+    const std::vector<xla::Shape>& parameter_shapes,
+    size_t param_to_return_count) const {
   xla::XlaBuilder b("xla_computation");
   b.set_die_immediately_on_error(true);
   const auto returned_tuple_maybe =
@@ -1258,11 +1259,20 @@ at::optional<xla::XlaComputation> XlaCodeImpl::buildXlaComputation(
     return at::nullopt;
   }
   const auto returned_tuple = *returned_tuple_maybe;
-  if (returned_tuple.outputs.size() > 1) {
-    xla::Tuple(&b, returned_tuple.outputs);
+  std::vector<xla::XlaOp> returned_tuple_outputs;
+  CHECK_GE(returned_tuple.inputs.size(), param_to_return_count);
+  for (size_t i = 0; i < param_to_return_count; ++i) {
+    returned_tuple_outputs.push_back(returned_tuple.inputs[i]);
+  }
+  returned_tuple_outputs.insert(
+      returned_tuple_outputs.end(),
+      returned_tuple.outputs.begin(),
+      returned_tuple.outputs.end());
+  if (returned_tuple_outputs.size() > 1) {
+    xla::Tuple(&b, returned_tuple_outputs);
   } else {
     // Ensure that the returned value is the root of the computation.
-    activate_return_node(returned_tuple.outputs[0], &b);
+    activate_return_node(returned_tuple_outputs[0], &b);
   }
   return b.Build().ValueOrDie();
 }

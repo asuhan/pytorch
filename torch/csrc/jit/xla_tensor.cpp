@@ -151,8 +151,9 @@ XLATensor::XLATensor(const autograd::Variable& tensor)
 
 XLATensor::XLATensor(
     std::unique_ptr<xla::GlobalData> xla_data,
-    const xla::Shape& shape)
-    : data_(new XLATensorData(std::move(xla_data), shape)),
+    const xla::Shape& shape,
+    const XlaModule* module)
+    : data_(new XLATensorData(std::move(xla_data), shape, module)),
       requires_grad_(false) {}
 
 at::Tensor XLATensor::toTensor() {
@@ -183,6 +184,10 @@ std::vector<int64_t> XLATensor::size() const {
 
 xla::GlobalData* XLATensor::xlaData() const {
   return data_->xlaData();
+}
+
+const XlaModule* XLATensor::forwardModule() const {
+  return data_->forwardModule();
 }
 
 // Basic tensor operations used by the optimizers.
@@ -330,7 +335,7 @@ void XLATensor::setMultiFromResult(
 }
 
 XLATensorData::XLATensorData(const autograd::Variable& tensor)
-    : grad_(nullptr), b_("XLATensor") {
+    : grad_(nullptr), b_("XLATensor"), module_(nullptr) {
   auto client_ = XlaGetClient();
   dtype_ = *make_xla_primitive_type(tensor.type().scalarType());
   shape_ = make_xla_shape(tensor.sizes(), dtype_);
@@ -339,11 +344,13 @@ XLATensorData::XLATensorData(const autograd::Variable& tensor)
 
 XLATensorData::XLATensorData(
     std::unique_ptr<xla::GlobalData> xla_data,
-    const xla::Shape& shape)
+    const xla::Shape& shape,
+    const XlaModule* module)
     : xla_data_(std::move(xla_data)),
       shape_(shape),
       dtype_(shape.element_type()),
-      b_("XLATensor") {}
+      b_("XLATensor"),
+      module_(module) {}
 
 std::shared_ptr<XLATensor> XLATensorData::grad() const {
   return grad_;
@@ -364,6 +371,10 @@ std::vector<int64_t> XLATensorData::size() const {
 
 xla::GlobalData* XLATensorData::xlaData() const {
   return xla_data_.get();
+}
+
+const XlaModule* XLATensorData::forwardModule() const {
+  return module_;
 }
 
 at::Tensor XLATensorData::toTensor() {

@@ -31,7 +31,10 @@ XlaModule::XlaModule(
     script::Module& module,
     std::vector<autograd::Variable>& inputs,
     bool backward)
-    : forward_graph_initialized_(false), backward_graph_initialized_(false) {
+    : forward_graph_initialized_(false),
+      backward_graph_initialized_(false),
+      backward_(backward),
+      prefer_fused_traces_(true) {
   const auto forward = module.find_method("forward");
   JIT_ASSERT(forward);
 
@@ -138,12 +141,23 @@ xla::Shape make_xla_shape(
 
 std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     const std::vector<std::shared_ptr<XLATensor>>& inputs) {
+  if (backward_ && prefer_fused_traces_) {
+    const auto return_node = df_->return_node();
+    const auto node_inputs = return_node->inputs();
+    if (!node_inputs.empty()) {
+      return train(inputs);
+    }
+  }
+  return doForward(inputs);
+}
+
+std::vector<std::shared_ptr<XLATensor>> XlaModule::doForward(
+    const std::vector<std::shared_ptr<XLATensor>>& inputs) {
   XLATensor::applyOpsMulti(inputs);
   XLATensor::applyOpsMulti(params_);
   // clear the previous forward's captured vectors.
   // This is needed in case backward is not yet run, but two forward calls were
   // made
-  inputs_.clear();
   captured_outputs_.clear();
   captured_inputs_outputs_.clear();
 
@@ -167,7 +181,8 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     }
 
     XlaCodeImpl xla_fwd_impl(f_);
-    auto maybe_computation = xla_fwd_impl.buildXlaComputation(forward_shapes);
+    auto maybe_computation =
+        xla_fwd_impl.buildXlaComputation(forward_shapes, 0);
     if (!maybe_computation) {
       AT_ERROR("Failed to build XlaComputation");
     }
@@ -210,13 +225,13 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
     for (size_t i = 0; i < tuple_elements.size(); ++i) {
       auto& tuple_element = tuple_elements[i];
       auto raw_output = std::make_shared<XLATensor>(
-          std::move(tuple_element), forward_ret_shape_cache_[i]);
+          std::move(tuple_element), forward_ret_shape_cache_[i], nullptr);
       raw_outputs.push_back(raw_output);
     }
   } else {
     CHECK_EQ(forward_ret_shape_cache_.size(), size_t(1));
     auto raw_output = std::make_shared<XLATensor>(
-        std::move(result_dh), forward_ret_shape_cache_[0]);
+        std::move(result_dh), forward_ret_shape_cache_[0], nullptr);
     raw_outputs.push_back(raw_output);
   }
 
@@ -244,6 +259,33 @@ std::vector<std::shared_ptr<XLATensor>> XlaModule::forward(
 
 void XlaModule::backward(
     const std::vector<std::shared_ptr<XLATensor>>& grad_outputs) {
+  bool input_gradients_valid = true;
+  for (const auto& grad_output : grad_outputs) {
+    if (!grad_output->forwardModule()) {
+      forward_graph_initialized_ = false;
+      doForward(inputs_);
+      input_gradients_valid = false;
+      prefer_fused_traces_ = false;
+      break;
+    }
+  }
+  if (input_gradients_valid) {
+    // now set .grad attributes of the input and param tensors
+    JIT_ASSERT(inputs_require_grad_.size() >= inputs_.size() + params_.size());
+    size_t grad_index = 0;
+    for (size_t i = 0; i < inputs_.size(); i++) {
+      if (inputs_require_grad_[i]) {
+        inputs_[i]->setGrad(grad_inputs_[grad_index]);
+        ++grad_index;
+      }
+    }
+
+    for (size_t i = 0; i < params_.size(); i++) {
+      params_[i]->setGrad(grad_inputs_[grad_index]);
+      ++grad_index;
+    }
+    return;
+  }
   XLATensor::applyOpsMulti(grad_outputs);
   XLATensor::applyOpsMulti(params_);
   std::vector<std::shared_ptr<XLATensor>> raw_grad_outputs;
@@ -265,6 +307,7 @@ void XlaModule::backward(
 
   // if backward graph is not compiled, compile it
   if (!backward_graph_initialized_) {
+    backward_ret_shape_cache_.clear();
     std::vector<xla::Shape> backward_shapes;
     for (auto p : raw_grad_outputs) {
       if (p) {
@@ -275,7 +318,8 @@ void XlaModule::backward(
     }
 
     XlaCodeImpl xla_bwd_impl(df_);
-    auto maybe_computation = xla_bwd_impl.buildXlaComputation(backward_shapes);
+    auto maybe_computation =
+        xla_bwd_impl.buildXlaComputation(backward_shapes, 0);
     if (!maybe_computation) {
       AT_ERROR("Failed to build backward XlaComputation");
     }
@@ -323,13 +367,13 @@ void XlaModule::backward(
     for (size_t i = 0; i < tuple_elements.size(); ++i) {
       auto& tuple_element = tuple_elements[i];
       auto grad_input = std::make_shared<XLATensor>(
-          std::move(tuple_element), backward_ret_shape_cache_[i]);
+          std::move(tuple_element), backward_ret_shape_cache_[i], nullptr);
       grad_inputs.push_back(grad_input);
     }
   } else {
     CHECK_EQ(backward_ret_shape_cache_.size(), size_t(1));
     auto grad_input = std::make_shared<XLATensor>(
-        std::move(result_dh), backward_ret_shape_cache_[0]);
+        std::move(result_dh), backward_ret_shape_cache_[0], nullptr);
     grad_inputs.push_back(grad_input);
   }
 
@@ -354,7 +398,8 @@ void XlaModule::backward(
   captured_inputs_outputs_.clear();
 }
 
-void XlaModule::train(const std::vector<std::shared_ptr<XLATensor>>& inputs) {
+std::vector<std::shared_ptr<XLATensor>> XlaModule::train(
+    const std::vector<std::shared_ptr<XLATensor>>& inputs) {
   XLATensor::applyOpsMulti(inputs);
   XLATensor::applyOpsMulti(params_);
   // clear the previous forward's captured vectors.
@@ -424,7 +469,8 @@ void XlaModule::train(const std::vector<std::shared_ptr<XLATensor>>& inputs) {
       backward_operands.push_back(p);
     }
     XlaCodeImpl xla_bwd_impl(df_);
-    auto maybe_computation = xla_bwd_impl.buildXlaComputation(backward_shapes);
+    auto maybe_computation =
+        xla_bwd_impl.buildXlaComputation(backward_shapes, f_real_outputs);
     if (!maybe_computation) {
       AT_ERROR("Failed to build backward XlaComputation");
     }
@@ -459,43 +505,30 @@ void XlaModule::train(const std::vector<std::shared_ptr<XLATensor>>& inputs) {
   auto result_dh = client->ExecuteComputation(
       forward_graph_, inputs_params_buffers_data, &backward_shape);
 
-  std::vector<std::shared_ptr<XLATensor>> grad_inputs;
   // convert tuples into vector of XLATensor
-  if (backward_ret_shape_cache_.size() > 1) {
-    auto tuple_elements = client->DeconstructTuple(*result_dh).ValueOrDie();
-    CHECK_EQ(backward_ret_shape_cache_.size(), tuple_elements.size());
-    for (size_t i = 0; i < tuple_elements.size(); ++i) {
-      auto& tuple_element = tuple_elements[i];
-      auto grad_input = std::make_shared<XLATensor>(
-          std::move(tuple_element), backward_ret_shape_cache_[i]);
-      grad_inputs.push_back(grad_input);
-    }
-  } else {
-    CHECK_EQ(backward_ret_shape_cache_.size(), size_t(1));
+  CHECK_GT(backward_ret_shape_cache_.size(), size_t(1));
+  auto tuple_elements = client->DeconstructTuple(*result_dh).ValueOrDie();
+  CHECK_EQ(backward_ret_shape_cache_.size(), tuple_elements.size());
+  CHECK_LE(f_real_outputs, tuple_elements.size());
+  std::vector<std::shared_ptr<XLATensor>> forward_result;
+  for (size_t i = 0; i < f_real_outputs; ++i) {
+    auto& tuple_element = tuple_elements[i];
+    forward_result.push_back(std::make_shared<XLATensor>(
+        std::move(tuple_element), backward_ret_shape_cache_[i], this));
+  }
+  grad_inputs_.clear();
+  for (size_t i = f_real_outputs; i < tuple_elements.size(); ++i) {
+    auto& tuple_element = tuple_elements[i];
     auto grad_input = std::make_shared<XLATensor>(
-        std::move(result_dh), backward_ret_shape_cache_[0]);
-    grad_inputs.push_back(grad_input);
-  }
-
-  // now set .grad attributes of the input and param tensors
-  JIT_ASSERT(inputs_require_grad_.size() >= inputs_.size() + params_.size());
-  size_t grad_index = 0;
-  for (size_t i = 0; i < inputs_.size(); i++) {
-    if (inputs_require_grad_[i]) {
-      inputs_[i]->setGrad(grad_inputs[grad_index]);
-      ++grad_index;
-    }
-  }
-
-  for (size_t i = 0; i < params_.size(); i++) {
-    params_[i]->setGrad(grad_inputs[grad_index]);
-    ++grad_index;
+        std::move(tuple_element), backward_ret_shape_cache_[i], this);
+    grad_inputs_.push_back(grad_input);
   }
 
   // release handles to saved / captured inputs and outputs
-  inputs_.clear();
   captured_outputs_.clear();
   captured_inputs_outputs_.clear();
+
+  return forward_result;
 }
 
 std::vector<std::shared_ptr<XLATensor>> XlaModule::parameters() {
