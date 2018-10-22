@@ -92,4 +92,8 @@ TORCH_API bool isDifferentiable(Node * n);
 TORCH_API bool isDifferentiable(Graph & g);
 TORCH_API bool isZero(Value * v);
 
+int64_t int_attr(const Node* parent, const Symbol& attr);
+std::vector<int64_t> int_list_attr(const Node* parent, const Symbol& attr);
+float float_attr(const Node* parent, const Symbol& attr);
+
 }}

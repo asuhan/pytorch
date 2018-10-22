@@ -12,6 +12,9 @@
 #include "torch/csrc/jit/passes/to_batch.h"
 #include "torch/csrc/jit/function_schema.h"
 #include "torch/csrc/jit/script/parser.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/xla_module.h"
+#endif  // WITH_XLA
 
 #include <torch/csrc/api/include/torch/detail/ordered_dict.h>
 
@@ -401,6 +404,32 @@ FunctionSchema getSchemaWithDefaults(
       schema.is_vararg,
       schema.is_varret);
 }
+#ifdef WITH_XLA
+std::vector<std::shared_ptr<XLATensor> > createTensorList(py::tuple tuple, size_t reserve_extra_space = 0) {
+  std::vector<std::shared_ptr<XLATensor> > result;
+  result.reserve(tuple.size() + reserve_extra_space);
+  for(auto e : tuple) {
+    auto variable = py::cast<std::shared_ptr<XLATensor> >(e);
+    result.push_back(variable);
+  }
+  return result;
+}
+
+py::object unpackXLATensorList(std::vector<std::shared_ptr<XLATensor> > outputs) {
+  if (outputs.size() == 0) {
+    return py::none();
+  } else if (outputs.size() == 1) {
+    return py::cast(outputs[0]);
+  } else {
+    py::tuple tuple(outputs.size());
+    for(size_t i = 0; i < outputs.size(); i++) {
+      tuple[i] = py::cast(outputs[i]);
+    }
+    return tuple;
+  }
+}
+
+#endif  // WITH_XLA
 
 void initJitScriptBindings(PyObject* module) {
   auto m = py::handle(module).cast<py::module>();
@@ -587,6 +616,28 @@ void initJitScriptBindings(PyObject* module) {
   m.def("_jit_script_compile", [](const Def &def, ResolutionCallback rcb) {
     return compileFunction(def, pythonResolver(rcb));
   });
+#ifdef WITH_XLA
+  py::class_<XlaModule, std::shared_ptr<XlaModule>>(m, "XlaModule")
+    .def(
+	 py::init([](script::Module& module, std::vector<autograd::Variable>& inputs, bool backward) {
+	     return std::make_shared<XlaModule>(module, inputs, backward);
+	   }), py::arg("module"), py::arg("inputs"), py::arg("backward") = true)
+    .def("__call__", [](XlaModule& xla_module, py::args args) -> py::object {
+	auto inputs = createTensorList(args);
+	auto outputs = xla_module.forward(inputs);
+	return unpackXLATensorList(outputs);
+      })
+    .def("backward", [](XlaModule& xla_module, py::args args) {
+	auto inputs = createTensorList(args);
+	xla_module.backward(inputs);
+      })
+    .def("parameters", [](XlaModule& xla_module) {
+	return xla_module.parameters();
+      })
+    .def("parameters_buffers", [](XlaModule& xla_module) {
+	return xla_module.parameters_buffers();
+      });
+#endif  // WITH_XLA
 
   m.def("parse_type_comment", [](const std::string& comment) {
     Parser p(comment);

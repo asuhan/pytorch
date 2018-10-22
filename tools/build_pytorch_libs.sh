@@ -23,6 +23,7 @@ USE_MKLDNN=0
 USE_GLOO_IBVERBS=0
 CAFFE2_STATIC_LINK_CUDA=0
 RERUN_CMAKE=1
+WITH_XLA=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
       --dont-rerun-cmake)
@@ -45,6 +46,9 @@ while [[ $# -gt 0 ]]; do
           ;;
       --cuda-static-link)
           CAFFE2_STATIC_LINK_CUDA=1
+          ;;
+      --with-xla)
+          WITH_XLA=1
           ;;
       *)
           break
@@ -377,6 +381,16 @@ for arg in "$@"; do
     fi
 done
 
+if [[ $WITH_XLA -eq 1 ]]; then
+  pushd $THIRD_PARTY_DIR/tensorflow
+  git reset --hard
+  git clean -f
+  patch -p1 < $BASE_DIR/tensorflow.patch
+  bazel build -c opt //tensorflow/compiler/xla/rpc:libxla_computation_client.so
+  bazel build -c opt //tensorflow/compiler/xla/rpc:grpc_service_main_cpu
+  popd
+fi
+
 pushd $TORCH_LIB_DIR
 
 # If all the builds succeed we copy the libraries, headers,
@@ -399,6 +413,13 @@ echo "Copying $INSTALL_DIR/include to $(pwd)"
 $SYNC_COMMAND -r "$INSTALL_DIR/include" .
 if [ -d "$INSTALL_DIR/bin/" ]; then
     $SYNC_COMMAND -r "$INSTALL_DIR/bin/"/* .
+fi
+
+if [[ $WITH_XLA -eq 1 ]]; then
+  chmod 0644 $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/compiler/xla/rpc/libxla_computation_client.so
+  cp $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/compiler/xla/rpc/libxla_computation_client.so .
+  chmod 0644 $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/libtensorflow_framework.so
+  cp $THIRD_PARTY_DIR/tensorflow/bazel-bin/tensorflow/libtensorflow_framework.so .
 fi
 
 popd

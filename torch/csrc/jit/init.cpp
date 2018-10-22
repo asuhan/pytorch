@@ -28,6 +28,10 @@
 #include "torch/csrc/jit/passes/to_batch.h"
 #include "torch/csrc/jit/passes/lower_tuples.h"
 #include "torch/csrc/jit/passes/specialize_undef.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/passes/unwrap_buffered_functions.h"
+#include "torch/csrc/jit/passes/constant_folding.h"
+#endif  // WITH_XLA
 #include "torch/csrc/jit/graph_executor.h"
 #include "torch/csrc/jit/script/init.h"
 #include "torch/csrc/jit/script/python_tree_views.h"
@@ -37,6 +41,12 @@
 #include "torch/csrc/jit/serialization.h"
 #include "torch/csrc/jit/operator.h"
 #include "torch/csrc/jit/fusers/interface.h"
+#ifdef WITH_XLA
+#include "torch/csrc/jit/passes/xla_remove_unused.h"
+#include "torch/csrc/jit/script/module.h"
+#include "torch/csrc/jit/xla_module.h"
+#include "torch/csrc/jit/xla_tensor.h"
+#endif  // WITH_XLA
 
 #include <pybind11/functional.h>
 
@@ -137,6 +147,11 @@ void initJITBindings(PyObject *module) {
    .def("_jit_pass_fixup_onnx_loops", FixupONNXLoops)
    .def("_jit_pass_canonicalize_ops", CanonicalizeOps)
    .def("_jit_pass_specialize_undef", specializeUndef)
+#ifdef WITH_XLA
+   .def("_jit_pass_unwrap_buffered_functions", UnwrapBufferedFunctions)
+   .def("_jit_pass_constant_fold", ConstantFold)
+   .def("_jit_pass_xla_remove_unused", XlaRemoveUnused)
+#endif  // WITH_XLA
    .def("_jit_override_can_fuse_on_cpu", &overrideCanFuseOnCPU)
    .def("_jit_differentiate", [](Graph &g) {
        // the python binding slightly differs in semantics
@@ -188,6 +203,61 @@ void initJITBindings(PyObject *module) {
     .def_property_readonly("df_output_vjps", [](Gradient& m) {
       return m.df_output_vjps;
     });
+
+#ifdef WITH_XLA
+  py::class_<XLATensor, std::shared_ptr<XLATensor>>(m, "XLATensor")
+    .def(
+	    py::init([](autograd::Variable tensor) {
+	     return std::make_shared<XLATensor>(tensor);
+	   }), py::arg("tensor"))
+    .def("to_tensor", [](XLATensor &s) {
+	    return s.toTensor();
+    })
+    .def("add_", [](std::shared_ptr<XLATensor> self, double alpha, XLATensor &other) {
+      self->add_(other, alpha);
+      return self;
+    })
+    .def("add_", [](std::shared_ptr<XLATensor> self, XLATensor &other) {
+      self->add_(other, 1.);
+      return self;
+    })
+    .def("mul_", [](std::shared_ptr<XLATensor> self, XLATensor &other) {
+      self->mul_(other);
+      return self;
+    }, py::arg("other"))
+    .def("mul_", [](std::shared_ptr<XLATensor> self, double other) {
+      self->mul_(other);
+      return self;
+    })
+    .def("zero_", [](std::shared_ptr<XLATensor> self) {
+      self->zero_();
+      return self;
+    })
+    .def("detach_", [](std::shared_ptr<XLATensor> self) {
+      self->detach_();
+      return self;
+    })
+    .def_property_readonly("data", [](std::shared_ptr<XLATensor> self) {
+      if (!self->data()) {
+        return py::cast<std::shared_ptr<XLATensor>>(self);
+      }
+      return py::cast<std::shared_ptr<XLATensor>>(self->data());
+    })
+    .def_property_readonly("is_leaf", [](const XLATensor&) {
+      return true;
+    })
+    .def_property_readonly("grad", [](XLATensor& m) -> py::object {
+      if (m.grad() == nullptr) {
+        return py::none();
+      } else {
+        return py::cast<std::shared_ptr<XLATensor>>(m.grad());
+      }
+    }).def("__repr__", [](XLATensor& m) {
+      std::ostringstream s;
+      s << m.toTensor();
+      return s.str();
+    });
+#endif // WITH_XLA
 
   py::class_<GraphExecutorState>(m, "GraphExecutorState")
     .def_property_readonly("graph", [](GraphExecutorState& s) {

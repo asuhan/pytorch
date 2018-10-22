@@ -227,11 +227,41 @@ struct SymbolicVariable {
   SymbolicVariable reshape(std::vector<std::int64_t> sizes) const {
     return reshape(insertConstant(sizes));
   }
+  SymbolicVariable view_as(SymbolicVariable input) const {
+    return view(input.sizes()).typeLike(input);
+  }
   SymbolicVariable addmm(SymbolicVariable mat1, SymbolicVariable mat2) const {
     return create(aten::addmm, {*this, mat1, mat2, insertConstant(1), insertConstant(1)})[0];
   }
+  static SymbolicVariable max_pool2d_with_indices_backward(const SymbolicVariable grad,
+                                                           const SymbolicVariable input,
+                                                           const SymbolicVariable indices,
+                                                           const std::vector<int64_t>& kernel_size,
+                                                           const std::vector<int64_t>& stride,
+                                                           const std::vector<int64_t>& padding,
+                                                           const std::vector<int64_t>& dilation,
+                                                           const bool ceil_mode) {
+    return create(aten::max_pool2d_with_indices_backward, {
+      grad, input, grad.insertConstant(kernel_size),
+      grad.insertConstant(stride), grad.insertConstant(padding),
+      grad.insertConstant(dilation), grad.insertConstant(ceil_mode),
+      indices})[0];
+  }
   Value * value() const {
     return v;
+  }
+  static SymbolicVariable avg_pool2d_backward(const SymbolicVariable grad,
+                                              const SymbolicVariable input,
+                                              const std::vector<int64_t>& kernel_size,
+                                              const std::vector<int64_t>& stride,
+                                              const std::vector<int64_t>& padding,
+                                              const bool ceil_mode,
+                                              const bool count_include_pad) {
+    return create(aten::avg_pool2d_backward, {
+      grad, input, grad.insertConstant(kernel_size),
+      grad.insertConstant(stride), grad.insertConstant(padding),
+      grad.insertConstant(ceil_mode),
+      grad.insertConstant(count_include_pad)})[0];
   }
 private:
   Value * insertConstant(IValue value) const {

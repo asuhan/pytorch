@@ -22,6 +22,66 @@ void wrapDim(int64_t & dim, const std::vector<int64_t> & sizes) {
   }
 }
 
+namespace {
+
+at::optional<int64_t> int_attr_maybe(const Node* parent, const size_t id) {
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      JIT_ASSERT(output->type()->kind() == TypeKind::IntType ||
+                 output->type()->kind() == TypeKind::BoolType);
+      return node->i(attr::value);
+    }
+  }
+  return c10::nullopt;
+}
+
+int64_t int_attr(const Node* parent, const size_t id) {
+  const auto attr_opt = int_attr_maybe(parent, id);
+  JIT_ASSERTM(attr_opt, "Constant with id ", id, " not found.");
+  return *attr_opt;
+}
+
+at::optional<std::vector<int64_t>> int_list_attr_maybe(const Node* parent, const Symbol& attr) {
+  const auto id = parent->namedInput(attr)->unique();
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  std::vector<int64_t> result;
+  for (const auto node : nodes) {
+    if (node->kind() != prim::ListConstruct && node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() != id) {
+      continue;
+    }
+    if (node->kind() == prim::Constant) {
+      JIT_ASSERT(output->type()->kind() == TypeKind::ListType);
+      JIT_ASSERT(output->type()->expect<ListType>()->getElementType()->kind() == TypeKind::IntType);
+      return node->is(attr::value);
+    }
+    const auto node_inputs = node->inputs();
+    for (const auto input : node_inputs) {
+      const auto elem_maybe = int_attr_maybe(node, input->unique());
+      if (!elem_maybe) {
+        return c10::nullopt;
+      }
+      result.push_back(*elem_maybe);
+    }
+    return result;
+  }
+  return c10::nullopt;
+}
+
+}  // namespace
+
 bool isDifferentiable(Node * n) {
   // TODO: scalar-tensor ops should be canonicalized
   static OperatorSet differentiable_ops = {
@@ -36,11 +96,13 @@ bool isDifferentiable(Node * n) {
     "aten::sigmoid(Tensor self) -> Tensor",
     "aten::tanh(Tensor self) -> Tensor",
     "aten::relu(Tensor self) -> Tensor",
+    "aten::threshold(Tensor self, Scalar threshold, Scalar value) -> Tensor",
     "aten::exp(Tensor self) -> Tensor",
     "aten::t(Tensor self) -> Tensor",
     "aten::neg(Tensor self) -> Tensor",
     "aten::clamp(Tensor self, Scalar min, Scalar max) -> Tensor",
     "aten::type_as(Tensor self, Tensor other) -> Tensor",
+    "aten::view(Tensor self, int[] size) -> Tensor",
     "aten::unsqueeze(Tensor self, int dim) -> Tensor",
     "aten::addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta, Scalar alpha) -> Tensor",
     "aten::mm(Tensor self, Tensor mat2) -> Tensor",
@@ -74,6 +136,11 @@ bool isDifferentiable(Node * n) {
     "aten::sinh(Tensor self) -> Tensor",
     "aten::tan(Tensor self) -> Tensor",
     "aten::trunc(Tensor self) -> Tensor",
+    "aten::expand(Tensor self, int[] size, *, bool implicit) -> Tensor",
+    "aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, bool ceil_mode, bool count_include_pad) -> Tensor",
+    "aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, bool ceil_mode) -> (Tensor, Tensor)",
+    "aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)",
+    "aten::log_softmax(Tensor self, int dim) -> Tensor"
   };
 
   // TODO: add support for the following fusible operators.
@@ -84,7 +151,10 @@ bool isDifferentiable(Node * n) {
 
   if (n->kind() == prim::Constant ||
       n->kind() == prim::AutogradAdd ||
-      n->kind() == prim::ConstantChunk)
+      n->kind() == prim::ConstantChunk ||
+      n->kind() == prim::Undefined ||
+      n->kind() == prim::ListConstruct ||
+      n->kind() == aten::thnn_batch_norm_forward)
     return true;
   if (differentiable_ops.find(n))
     return true;
@@ -108,6 +178,42 @@ bool isDifferentiable(Graph & g) {
                      static_cast<bool(*)(Node*)>(isDifferentiable));
 }
 
+int64_t int_attr(const Node* parent, const Symbol& attr) {
+  return int_attr(parent, parent->namedInput(attr)->unique());
+}
+
+std::vector<int64_t> int_list_attr(const Node* parent, const Symbol& attr) {
+  const auto attr_opt = int_list_attr_maybe(parent, attr);
+  if (!attr_opt) {
+    const auto id = parent->namedInput(attr)->unique();
+    JIT_ASSERTM(attr_opt, "Constant with id ", id, " not found.");
+  }
+  return *attr_opt;
+}
+
+float float_attr(const Node* parent, const Symbol& attr) {
+  const auto id = parent->namedInput(attr)->unique();
+  const auto nodes = parent->owningGraph()->block()->nodes();
+  for (const auto node : nodes) {
+    if (node->kind() != prim::Constant) {
+      continue;
+    }
+    const auto node_outputs = node->outputs();
+    JIT_ASSERT(node_outputs.size() == 1);
+    const auto output = node_outputs[0];
+    if (output->unique() == id) {
+      switch (node_outputs[0]->type()->kind()) {
+        case TypeKind::FloatType:
+          return node->f(attr::value);
+        case TypeKind::IntType:
+          return node->i(attr::value);
+        default:
+          JIT_ASSERTM(false, "Cannot cast type to float");
+      }
+    }
+  }
+  JIT_ASSERTM(false, "Constant with id ", id, " not found.");
+}
 
 static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_values) {
   static const OperatorSet comparison_ops = {
@@ -123,6 +229,10 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
     auto outputs = fmap<SymbolicVariable>(node->outputs());
 
     if (node->matches("aten::add(Tensor self, Tensor other, *, Scalar alpha) -> Tensor")) {
+      const auto alpha = *node->get<at::Scalar>(attr::alpha);
+      if (SymbolicVariable::isConstInt(alpha, 1)) {
+        return {grads.at(0), grads.at(0), nullptr};
+      }
       return {grads.at(0), grads.at(0) * node->namedInput(attr::alpha), nullptr};
 
     } else if (node->matches("aten::add(Tensor self, Scalar other, Scalar alpha) -> Tensor")) {
@@ -132,6 +242,10 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       return {grads.at(0), grads.at(0)};
 
     } else if (node->matches("aten::sub(Tensor self, Tensor other, *, Scalar alpha) -> Tensor")) {
+      const auto alpha = *node->get<at::Scalar>(attr::alpha);
+      if (SymbolicVariable::isConstInt(alpha, 1)) {
+        return {grads.at(0), -grads.at(0), nullptr};
+      }
       return {grads.at(0), -grads.at(0) * node->namedInput(attr::alpha), nullptr};
 
     } else if (node->matches("aten::sub(Tensor self, Scalar other, Scalar alpha) -> Tensor")) {
@@ -205,6 +319,9 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
     } else if (node->matches("aten::cosh(Tensor self) -> Tensor")) {
       return {grads.at(0) * inputs.at(0).sinh()};
 
+    } else if (node->matches("aten::threshold(Tensor self, Scalar threshold, Scalar value) -> Tensor")) {
+      return {grads.at(0) * (inputs.at(0) > at::Scalar(float_attr(node, attr::threshold))).type_as(outputs.at(0)), nullptr, nullptr};
+
     } else if (node->matches("aten::exp(Tensor self) -> Tensor")) {
       return {grads.at(0) * outputs.at(0)};
 
@@ -259,8 +376,12 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
     } else if (node->kind() == prim::ConstantChunk) {
       return {SymbolicVariable::cat(grads, node->i(attr::dim))};
 
-    } else if (node->matches("aten::view(Tensor self, int[] size) -> Tensor") ||
-               node->matches("aten::reshape(Tensor self, int[] shape) -> Tensor")) {
+    } else if (node->matches("aten::view(Tensor self, int[] size) -> Tensor")) {
+      // TODO: if sizes are not available statically, add an operator that reutrns them as a tuple
+      auto sizes = node->namedInput(attr::self)->type()->expect<CompleteTensorType>()->sizes();
+      return {grads.at(0).view_as(inputs.at(0)), nullptr};
+
+    } else if (node->matches("aten::reshape(Tensor self, int[] shape) -> Tensor")) {
       // TODO: if sizes are not available statically, add an operator that reutrns them as a tuple
       auto sizes = node->namedInput(attr::self)->type()->expect<CompleteTensorType>()->sizes();
       return {grads.at(0).reshape(sizes), nullptr};
@@ -284,7 +405,7 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       const auto& input_sizes = inputs.at(0).sizes();
       if (input_sizes.size() == 0)
         return {grads.at(0).sum(), nullptr, nullptr};
-      auto grad_sizes = node->get<std::vector<int64_t>>(attr::size).value();
+      auto grad_sizes = int_list_attr(node, attr::size);
       auto grad = grads.at(0);
       while (grad_sizes.size() > input_sizes.size()) {
         grad = grad.sum(0, false);
@@ -346,7 +467,96 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
     } else if (comparison_ops.find(node)) {
       return {nullptr, nullptr};
 
-    } else if (node->kind() == prim::Constant) {
+    } else if (node->matches("aten::avg_pool2d(Tensor self, int[] kernel_size, int[] stride, int[] padding, bool ceil_mode, bool count_include_pad) -> Tensor")) {
+      JIT_ASSERT(grads.size() == 1);
+      const auto kernel_size = int_list_attr(node, attr::kernel_size);
+      const auto stride = int_list_attr(node, attr::stride);
+      const auto padding = int_list_attr(node, attr::padding);
+      const auto ceil_mode = int_attr(node, attr::ceil_mode);
+      const auto count_include_pad = int_attr(node, attr::count_include_pad);
+      return {SymbolicVariable::avg_pool2d_backward(grads.at(0), inputs.at(0),
+                                                    kernel_size, stride,
+                                                    padding, ceil_mode,
+                                                    count_include_pad),
+                                                    nullptr, nullptr, nullptr, nullptr, nullptr};
+    } else if (node->matches("aten::max_pool2d_with_indices(Tensor self, int[] kernel_size, int[] stride, int[] padding, int[] dilation, bool ceil_mode) -> (Tensor, Tensor)")) {
+      JIT_ASSERT(grads.size() == 2);
+      const auto kernel_size = int_list_attr(node, attr::kernel_size);
+      const auto stride = int_list_attr(node, attr::stride);
+      const auto padding = int_list_attr(node, attr::padding);
+      const auto dilation = int_list_attr(node, attr::dilation);
+      const auto ceil_mode = int_attr(node, attr::ceil_mode);
+      return {SymbolicVariable::max_pool2d_with_indices_backward(grads.at(0), inputs.at(0),
+                                                                 outputs.at(1),
+                                                                 kernel_size,
+                                                                 stride,
+                                                                 padding,
+                                                                 dilation,
+                                                                 ceil_mode),
+                                                                 nullptr, nullptr, nullptr, nullptr, nullptr};
+
+    } else if (node->matches("aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)")) {
+      auto graph = node->owningGraph();
+      auto convNode = graph->create(aten::thnn_conv2d_backward, 3);
+      auto f = grads.at(0);
+      convNode->addInput(f);
+      convNode->addInput(inputs.at(0));
+      convNode->addInput(inputs.at(1));
+      convNode->addInput(graph->insertConstant(int_list_attr(node, attr::kernel_size)));
+      convNode->addInput(graph->insertConstant(int_list_attr(node, attr::stride)));
+      convNode->addInput(graph->insertConstant(int_list_attr(node, attr::padding)));
+      convNode->addInput(outputs.at(1));
+      convNode->addInput(outputs.at(2));
+      convNode->addInput(graph->insertConstant(std::vector<bool>{true, true, true}));
+      graph->insertNode(convNode);
+      auto outputs = convNode->outputs();
+      JIT_ASSERT(outputs.size() == size_t(3));
+      std::vector<SymbolicVariable> result;
+      result.emplace_back(outputs[0]);
+      result.emplace_back(outputs[1]);
+      result.emplace_back();
+      result.emplace_back(outputs[2]);
+      result.emplace_back();
+      result.emplace_back();
+      return result;
+
+    } else if (node->kind() == aten::thnn_batch_norm_forward) {
+      auto graph = node->owningGraph();
+      auto bnNode = graph->create(aten::thnn_batch_norm_backward, 3);
+      auto grad_out = grads.at(0);
+      bnNode->addInput(grad_out);
+      bnNode->addInput(inputs.at(0));
+      bnNode->addInput(inputs.at(1));
+      bnNode->addInput(inputs.at(3));
+      bnNode->addInput(inputs.at(4));
+      bnNode->addInput(inputs.at(5));
+      bnNode->addInput(inputs.at(7));
+      bnNode->addInput(outputs.at(1));
+      bnNode->addInput(outputs.at(2));
+      bnNode->addInput(graph->insertConstant(std::vector<bool>{true, true, true}));
+      graph->insertNode(bnNode);
+      auto outputs = fmap<SymbolicVariable>(bnNode->outputs());
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      return outputs;
+
+    } else if (node->matches("aten::log_softmax(Tensor self, int dim) -> Tensor")) {
+      auto graph = node->owningGraph();
+      auto thisNode = graph->create(aten::_log_softmax_backward_data);
+      auto grad_out = grads.at(0);
+      thisNode->addInput(grad_out);
+      thisNode->addInput(outputs.at(0));
+      thisNode->addInput(inputs.at(1));
+      thisNode->addInput(inputs.at(0));
+      graph->insertNode(thisNode);
+      return fmap<SymbolicVariable>(thisNode->outputs());
+
+    } else if (node->kind() == prim::Constant ||
+               node->kind() == prim::Undefined ||
+               node->kind() == prim::ListConstruct) {
       return {};
     }
     throw std::runtime_error(std::string("failed to differentiate `") + node->kind().toDisplayString() + "`");
@@ -459,7 +669,7 @@ static ReverseDetails addReverseInline(Gradient& grad_desc) {
     }
 
     value_list grad_inputs = linearGradientForNode(node, fmap(node->outputs(), get_grad));
-    JIT_ASSERT(grad_inputs.size() == node->inputs().size());
+    JIT_ASSERT(grad_inputs.size() <= node->inputs().size());
     for (size_t i = 0, num_inputs = grad_inputs.size(); i < num_inputs; ++i) {
       if (!inputs[i]->requires_grad()) continue;
       // NB: Not returning a gradient w.r.t. a value that requires grad is normal if the
@@ -514,9 +724,6 @@ static void liftConstants(Gradient& grad_desc, ReverseDetails& rev_info) {
     }
   }
 
-  // It's possible the we've cloned the same constants many times,
-  // so we use CSE to deduplicate them.
-  EliminateCommonSubexpression(reverse_block);
 }
 
 // Takes a grad_desc.f returned from `addReverseInline` and splits off the
@@ -607,7 +814,8 @@ static void lambdaLiftReverse(Gradient& grad_desc, ReverseDetails& rev_info) {
   for (size_t i = grad_desc.f_real_outputs; i < graph.outputs().size(); ++i) {
     Value * tmp = graph.outputs().at(i);
     // Add VJP inputs only for intermediates that actually required grad.
-    if (!tmp->requires_grad()) continue;
+    // TODO(asuhan): uncomment this line?
+    // if (!tmp->requires_grad()) continue;
     Value * tmp_vjp_in = reverse_block->addInput()->setType(tmp->type());
     Value * tmp_vjp_prev = rev_info.grad_map.at(tmp);
     // This is quite weird because we can't first make a sum and then replace all uses
@@ -664,6 +872,10 @@ Gradient differentiate(std::shared_ptr<Graph>& graph) {
   // Fills in f, df, f_real_outputs, df_input_captures,
   // modifies df_input_vjps (new vjps are added for temporaries)
   lambdaLiftReverse(grad_desc, rev_info);
+  // It's possible the we've cloned the same constants many times in liftConstants
+  // so we use CSE to deduplicate them. We can't do that earlier, because this might
+  // invalidate entries in the grad_map.
+  EliminateCommonSubexpression(grad_desc.df);
   return grad_desc;
 }
 

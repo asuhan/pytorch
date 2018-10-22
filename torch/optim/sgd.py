@@ -2,6 +2,11 @@ import torch
 from .optimizer import Optimizer, required
 
 
+def _zeros_like(p):
+    if isinstance(p, torch._C.XLATensor):
+        return torch._C.XLATensor(torch.zeros_like(p.to_tensor()))
+    return torch.zeros_like(p.data)
+
 class SGD(Optimizer):
     r"""Implements stochastic gradient descent (optionally with momentum).
 
@@ -94,7 +99,7 @@ class SGD(Optimizer):
                 if momentum != 0:
                     param_state = self.state[p]
                     if 'momentum_buffer' not in param_state:
-                        buf = param_state['momentum_buffer'] = torch.zeros_like(p.data)
+                        buf = param_state['momentum_buffer'] = _zeros_like(p)
                         buf.mul_(momentum).add_(d_p)
                     else:
                         buf = param_state['momentum_buffer']

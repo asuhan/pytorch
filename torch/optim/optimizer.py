@@ -8,6 +8,9 @@ from itertools import chain
 required = object()
 
 
+def _is_tensor(t):
+    return isinstance(t, torch.Tensor) or isinstance(t, torch._C.XLATensor)
+
 class Optimizer(object):
     r"""Base class for all optimizers.
 
@@ -26,7 +29,7 @@ class Optimizer(object):
     def __init__(self, params, defaults):
         self.defaults = defaults
 
-        if isinstance(params, torch.Tensor):
+        if _is_tensor(params):
             raise TypeError("params argument given to the optimizer should be "
                             "an iterable of Tensors or dicts, but got " +
                             torch.typename(params))
@@ -79,7 +82,7 @@ class Optimizer(object):
             return packed
         param_groups = [pack_group(g) for g in self.param_groups]
         # Remap state to use ids as keys
-        packed_state = {(id(k) if isinstance(k, torch.Tensor) else k): v
+        packed_state = {(id(k) if _is_tensor(k) else k): v
                         for k, v in self.state.items()}
         return {
             'state': packed_state,
@@ -115,7 +118,7 @@ class Optimizer(object):
 
         def cast(param, value):
             r"""Make a deep copy of value, casting all tensors to device of param."""
-            if isinstance(value, torch.Tensor):
+            if _is_tensor(value):
                 # Floating-point types are a bit special here. They are the only ones
                 # that are assumed to always match the type of params.
                 if param.is_floating_point():
@@ -178,7 +181,7 @@ class Optimizer(object):
         assert isinstance(param_group, dict), "param group must be a dict"
 
         params = param_group['params']
-        if isinstance(params, torch.Tensor):
+        if _is_tensor(params):
             param_group['params'] = [params]
         elif isinstance(params, set):
             raise TypeError('optimizer parameters need to be organized in ordered collections, but '
@@ -187,7 +190,7 @@ class Optimizer(object):
             param_group['params'] = list(params)
 
         for param in param_group['params']:
-            if not isinstance(param, torch.Tensor):
+            if not _is_tensor(param):
                 raise TypeError("optimizer can only optimize Tensors, "
                                 "but one of the params is " + torch.typename(param))
             if not param.is_leaf:

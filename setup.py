@@ -196,6 +196,8 @@ BUILD_PYTORCH = check_env_flag('BUILD_PYTORCH')
 USE_CUDA_STATIC_LINK = check_env_flag('USE_CUDA_STATIC_LINK')
 RERUN_CMAKE = True
 
+WITH_XLA = check_env_flag('WITH_XLA')
+
 NUM_JOBS = multiprocessing.cpu_count()
 max_jobs = os.getenv("MAX_JOBS")
 if max_jobs is not None:
@@ -411,6 +413,8 @@ def build_libs(libs):
     my_env["USE_LMDB"] = "ON" if USE_LMDB else "OFF"
     my_env["USE_OPENCV"] = "ON" if USE_OPENCV else "OFF"
     my_env["USE_FFMPEG"] = "ON" if USE_FFMPEG else "OFF"
+    if WITH_XLA:
+        build_libs_cmd += ['--with-xla']
 
     try:
         os.mkdir('build')
@@ -850,6 +854,14 @@ include_dirs += [
     "build/third_party",
 ]
 
+if WITH_XLA:
+    include_dirs += [
+        third_party_path + "/tensorflow/bazel-tensorflow",
+        third_party_path + "/tensorflow/bazel-genfiles",
+        third_party_path + "/tensorflow/bazel-tensorflow/external/protobuf_archive/src",
+        third_party_path + "/tensorflow/bazel-tensorflow/external/eigen_archive",
+    ]
+
 library_dirs.append(lib_path)
 
 # we specify exact lib names to avoid conflict with lua-torch installs
@@ -964,6 +976,14 @@ main_sources = [
     "torch/csrc/utils/tensor_types.cpp",
     "torch/csrc/utils/tuple_parser.cpp",
 ]
+
+if WITH_XLA:
+    main_sources.append('torch/csrc/jit/passes/constant_folding.cpp'),
+    main_sources.append('torch/csrc/jit/passes/unwrap_buffered_functions.cpp'),
+    main_sources.append('torch/csrc/jit/passes/xla_remove_unused.cpp')
+    main_sources.append('torch/csrc/jit/xla_code_impl.cpp')
+    main_sources.append('torch/csrc/jit/xla_module.cpp')
+    main_sources.append('torch/csrc/jit/xla_tensor.cpp')
 
 try:
     import numpy as np
@@ -1098,6 +1118,9 @@ if DEBUG:
         extra_compile_args += ['-O0', '-g']
         extra_link_args += ['-O0', '-g']
 
+if WITH_XLA:
+    extra_compile_args += ['-DWITH_XLA']
+    extra_link_args += ['-lxla_computation_client']
 
 def make_relative_rpath(path):
     if IS_DARWIN:
