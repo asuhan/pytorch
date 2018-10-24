@@ -1,0 +1,16 @@
+graph(%0 : Double(4, 1, 14, 14)
+      %1 : Double(4, 1, 28, 28)
+      %2 : Long(4, 1, 14, 14)) {
+  %3 : bool = prim::Constant[value=0]()
+  %4 : int[] = prim::Constant[value=[1, 1]]()
+  %5 : int[] = prim::Constant[value=[0, 0]]()
+  %6 : int[] = prim::Constant[value=[]]()
+  %7 : int[] = prim::Constant[value=[2, 2]]()
+  %8 : Dynamic = prim::Undefined()
+  %9 : Dynamic = prim::GradOf[name="aten::max_pool2d_with_indices"](%0, %8)
+    block0() {
+      %10 : Dynamic = aten::max_pool2d_with_indices_backward(%0, %1, %7, %6, %5, %4, %3, %2)
+      -> (%10)
+    }
+  return (%9);
+}

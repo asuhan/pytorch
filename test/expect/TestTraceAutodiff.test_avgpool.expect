@@ -1,0 +1,13 @@
+graph(%0 : Double(4, 1, 27, 27)
+      %1 : Double(4, 1, 28, 28)) {
+  %2 : bool = prim::Constant[value=0]()
+  %3 : int[] = prim::Constant[value=[0, 0]]()
+  %4 : int[] = prim::Constant[value=[1, 1]]()
+  %5 : int[] = prim::Constant[value=[2, 2]]()
+  %6 : Dynamic = prim::GradOf[name="aten::avg_pool2d"](%0)
+    block0() {
+      %7 : Dynamic = aten::avg_pool2d_backward(%0, %1, %5, %4, %3, %2, %2)
+      -> (%7)
+    }
+  return (%6);
+}

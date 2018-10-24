@@ -8407,6 +8407,94 @@ class TestAutodiffSubgraphSlicing(JitTestCase):
         self.assertGraphContains(graph, 'prim::DifferentiableGraph', 2)
 
 
+class TestTraceAutodiff(JitTestCase):
+
+    def test_logsoftmax(self):
+        dim = 0
+        batch = 1
+        class Mod(nn.Module):
+            def forward(self, x):
+                return F.log_softmax(x, dim)
+
+        model = Mod()
+        input = torch.randn(batch, 9, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+    def test_avgpool(self):
+        class Mod(nn.Module):
+            def __init__(self, stride, padding, count_include_pad):
+                super(Mod, self).__init__()
+                self.stride = stride
+                self.padding = padding
+                self.count_include_pad = count_include_pad
+
+            def forward(self, x):
+                return F.avg_pool2d(x, 2, self.stride, self.padding, False, self.count_include_pad)
+
+        stride = 1
+        padding = 0
+        count_include_pad = False
+        model = Mod(stride, padding, count_include_pad)
+        input = torch.randn(4, 1, 28, 28, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        torch._C._jit_pass_constant_propagation(traced.graph)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+    def test_maxpool(self):
+        class Mod(nn.Module):
+            def forward(self, x):
+                return F.max_pool2d(x, 2)
+
+        model = Mod()
+        input = torch.randn(4, 1, 28, 28, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        torch._C._jit_pass_constant_propagation(traced.graph)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+    def test_threshold(self):
+        class Mod(nn.Module):
+            def __init__(self):
+                super(Mod, self).__init__()
+                self.threshold = nn.Threshold(0.4, 20)
+
+            def forward(self, x):
+                return self.threshold(x)
+
+        model = Mod()
+        input = torch.randn(4, 2, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+    def test_expand(self):
+        class Mod(nn.Module):
+            def forward(self, x):
+                return x.expand(2, 5)
+
+        model = Mod()
+        input = torch.rand(5, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        torch._C._jit_pass_constant_propagation(traced.graph)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+    def test_view(self):
+        class Mod(nn.Module):
+            def forward(self, x):
+                return x.view(-1, 16)
+
+        model = Mod()
+        input = torch.rand(4, 8, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        torch._C._jit_pass_constant_propagation(traced.graph)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+
 class TestJitGenerated(JitTestCase):
     pass
 

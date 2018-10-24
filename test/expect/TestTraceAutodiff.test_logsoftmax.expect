@@ -1,0 +1,11 @@
+graph(%0 : Double(1, 9)
+      %1 : Double(1, 9)
+      %2 : Double(1, 9)) {
+  %3 : int = prim::Constant[value=0]()
+  %4 : Dynamic = prim::GradOf[name="aten::log_softmax"](%0)
+    block0() {
+      %5 : Dynamic = aten::_log_softmax_backward_data(%0, %2, %3, %1)
+      -> (%5)
+    }
+  return (%4);
+}

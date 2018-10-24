@@ -1,0 +1,13 @@
+graph(%0 : Double(4, 2)
+      %1 : Double(4, 2)
+      %2 : Double(4, 2)) {
+  %3 : Double(4, 2) = prim::GradOf[name="aten::threshold"](%0)
+    block0() {
+      %4 : float = prim::Constant[value=0.4]()
+      %5 : Byte(4, 2) = aten::gt(%1, %4)
+      %6 : Double(4, 2) = aten::type_as(%5, %2)
+      %7 : Double(4, 2) = aten::mul(%0, %6)
+      -> (%7)
+    }
+  return (%3);
+}
