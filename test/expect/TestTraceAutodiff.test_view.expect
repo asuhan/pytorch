@@ -1,0 +1,9 @@
+graph(%0 : Double(2, 16)) {
+  %1 : Dynamic = prim::GradOf[name="aten::view"](%0)
+    block0() {
+      %2 : int[] = prim::Constant[value=[4, 8]]()
+      %3 : Dynamic = aten::reshape(%0, %2)
+      -> (%3)
+    }
+  return (%1);
+}
