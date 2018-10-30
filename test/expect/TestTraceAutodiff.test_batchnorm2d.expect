@@ -1,0 +1,22 @@
+graph(%0 : Double(4, 3, 28, 28)
+      %1 : Dynamic
+      %2 : Dynamic
+      %3 : Double(4, 3, 28, 28)
+      %4 : Double(3)
+      %5 : Double(3)
+      %6 : Double(3)
+      %7 : Dynamic
+      %8 : Dynamic) {
+  %9 : float = prim::Constant[value=0.001](), scope: BatchNorm2d
+  %10 : bool = prim::Constant[value=1](), scope: BatchNorm2d
+  %11 : Dynamic = prim::Undefined()
+  %12 : Dynamic = prim::AutogradAdd(%1, %11)
+  %13 : Dynamic = prim::AutogradAdd(%2, %11)
+  %14 : Dynamic, %15 : Dynamic, %16 : Dynamic = prim::GradOf[name="aten::thnn_batch_norm_forward"](%0, %12, %13)
+    block0() {
+      %17 : bool[] = prim::Constant[value=[1, 1, 1]]()
+      %18 : Dynamic, %19 : Dynamic, %20 : Dynamic = aten::thnn_batch_norm_backward(%0, %3, %4, %5, %6, %10, %9, %7, %8, %17)
+      -> (%18, %19, %20)
+    }
+  return (%14, %15, %16);
+}

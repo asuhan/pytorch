@@ -9032,6 +9032,33 @@ class TestTraceAutodiff(JitTestCase):
         self.assertExpectedGraph(traced_diff.df)
         self.checkOutputsAndGradient(traced, [input])
 
+    def test_conv(self):
+        ichans = 3
+        ochans = 5
+        size = 2
+        stride = 1
+        padding = 1
+        bias = True
+        model = nn.Conv2d(ichans, ochans, size, stride, padding, bias=bias)
+        input = torch.randn(4, ichans, 28, 28, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        torch._C._jit_pass_constant_propagation(traced.graph)
+        torch._C._jit_pass_unwrap_buffered_functions(traced.graph)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
+    def test_batchnorm2d(self):
+        chans = 3
+        eps = 1e-3
+        # TODO: momentum, training, affine
+        model = nn.BatchNorm2d(chans, eps=eps)
+        input = torch.randn(4, chans, 28, 28, requires_grad=True)
+        traced = torch.jit.trace(model, input)
+        torch._C._jit_pass_constant_propagation(traced.graph)
+        torch._C._jit_pass_unwrap_buffered_functions(traced.graph)
+        traced_diff = torch._C._jit_differentiate(traced.graph)
+        self.assertExpectedGraph(traced_diff.df)
+
 
 class TestJitGenerated(JitTestCase):
     pass

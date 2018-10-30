@@ -1,0 +1,20 @@
+graph(%0 : Double(4, 5, 29, 29)
+      %1 : Dynamic
+      %2 : Dynamic
+      %3 : Double(4, 3, 28, 28)
+      %4 : Double(5, 3, 2, 2)
+      %5 : Dynamic
+      %6 : Dynamic) {
+  %7 : Dynamic = prim::Undefined()
+  %8 : Dynamic = prim::AutogradAdd(%1, %7)
+  %9 : Dynamic = prim::AutogradAdd(%2, %7)
+  %10 : Dynamic, %11 : Dynamic, %12 : Dynamic = prim::GradOf[name="aten::thnn_conv2d_forward"](%0, %8, %9)
+    block0() {
+      %13 : int[] = prim::Constant[value=[2, 2]]()
+      %14 : int[] = prim::Constant[value=[1, 1]]()
+      %15 : bool[] = prim::Constant[value=[1, 1, 1]]()
+      %16 : Dynamic, %17 : Dynamic, %18 : Dynamic = aten::thnn_conv2d_backward(%0, %3, %4, %13, %14, %14, %5, %6, %15)
+      -> (%16, %17, %18)
+    }
+  return (%10, %11, %12);
+}

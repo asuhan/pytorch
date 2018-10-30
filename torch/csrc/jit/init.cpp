@@ -28,6 +28,7 @@
 #include "torch/csrc/jit/passes/to_batch.h"
 #include "torch/csrc/jit/passes/lower_tuples.h"
 #include "torch/csrc/jit/passes/specialize_undef.h"
+#include "torch/csrc/jit/passes/unwrap_buffered_functions.h"
 #include "torch/csrc/jit/graph_executor.h"
 #include "torch/csrc/jit/script/init.h"
 #include "torch/csrc/jit/script/python_tree_views.h"
@@ -145,6 +146,7 @@ void initJITBindings(PyObject *module) {
    .def("_jit_pass_fixup_onnx_loops", FixupONNXLoops)
    .def("_jit_pass_canonicalize_ops", CanonicalizeOps)
    .def("_jit_pass_specialize_undef", specializeUndef)
+   .def("_jit_pass_unwrap_buffered_functions", UnwrapBufferedFunctions)
    .def("_jit_override_can_fuse_on_cpu", &overrideCanFuseOnCPU)
    .def("_jit_differentiate", [](Graph &g) {
        // the python binding slightly differs in semantics

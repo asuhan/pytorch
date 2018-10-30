@@ -90,6 +90,8 @@ bool isDifferentiable(Node * n) {
       n->kind() == prim::AutogradAdd ||
       n->kind() == prim::ConstantChunk)
     return true;
+  if (n->kind() == aten::thnn_batch_norm_forward)
+    return true;
   if (differentiable_ops.find(n))
     return true;
 
@@ -100,6 +102,11 @@ bool isDifferentiable(Node * n) {
   if (n->matches("aten::view(Tensor self, int[] size) -> Tensor")) {
     return n->get<std::vector<int64_t>>(attr::size) &&
       n->namedInput(attr::self)->type()->cast<CompleteTensorType>();
+  }
+  if (n->matches("aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)")) {
+    return n->get<std::vector<int64_t>>(attr::kernel_size) &&
+      n->get<std::vector<int64_t>>(attr::stride) &&
+      n->get<std::vector<int64_t>>(attr::padding);
   }
 
   // linear blocks may appear as inputs to graph executors, but they are removed
@@ -394,6 +401,57 @@ static std::vector<Value*> gradientForNode(Node* node, ArrayRef<Value*> grad_val
       });
       return {backward_value->node()->output(0), nullptr, nullptr, nullptr, nullptr, nullptr};
 
+    } else if (node->matches("aten::thnn_conv2d_forward(Tensor self, Tensor weight, int[] kernel_size, Tensor bias, int[] stride, int[] padding) -> (Tensor, Tensor, Tensor)")) {
+      auto graph = node->owningGraph();
+      auto convNode = graph->create(aten::thnn_conv2d_backward, 3);
+      auto f = grads.at(0);
+      convNode->addInput(f);
+      convNode->addInput(node->namedInput(attr::self));
+      convNode->addInput(node->namedInput(attr::weight));
+      const auto kernel_size = node->get<std::vector<int64_t>>(attr::kernel_size).value();
+      const auto stride = node->get<std::vector<int64_t>>(attr::stride).value();
+      const auto padding = node->get<std::vector<int64_t>>(attr::padding).value();
+      convNode->addInput(graph->insertConstant(kernel_size));
+      convNode->addInput(graph->insertConstant(stride));
+      convNode->addInput(graph->insertConstant(padding));
+      convNode->addInput(outputs.at(1));
+      convNode->addInput(outputs.at(2));
+      convNode->addInput(graph->insertConstant(std::vector<bool>{true, true, true}));
+      graph->insertNode(convNode);
+      auto outputs = convNode->outputs();
+      JIT_ASSERT(outputs.size() == size_t(3));
+      std::vector<SymbolicVariable> result;
+      result.emplace_back(outputs[0]);
+      result.emplace_back(outputs[1]);
+      result.emplace_back();
+      result.emplace_back(outputs[2]);
+      result.emplace_back();
+      result.emplace_back();
+      return result;
+
+    } else if (node->kind() == aten::thnn_batch_norm_forward) {
+      auto graph = node->owningGraph();
+      auto bnNode = graph->create(aten::thnn_batch_norm_backward, 3);
+      auto grad_out = grads.at(0);
+      bnNode->addInput(grad_out);
+      bnNode->addInput(inputs.at(0));
+      bnNode->addInput(inputs.at(1));
+      bnNode->addInput(inputs.at(3));
+      bnNode->addInput(inputs.at(4));
+      bnNode->addInput(inputs.at(5));
+      bnNode->addInput(inputs.at(7));
+      bnNode->addInput(outputs.at(1));
+      bnNode->addInput(outputs.at(2));
+      bnNode->addInput(graph->insertConstant(std::vector<bool>{true, true, true}));
+      graph->insertNode(bnNode);
+      auto outputs = fmap<SymbolicVariable>(bnNode->outputs());
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      outputs.emplace_back();
+      return outputs;
+
     } else if (node->matches("aten::log_softmax(Tensor self, int dim) -> Tensor")) {
       JIT_ASSERT(grads.size() == 1);
       auto graph = node->owningGraph();
@@ -572,10 +630,6 @@ static void liftConstants(Gradient& grad_desc, ReverseDetails& rev_info) {
       }
     }
   }
-
-  // It's possible the we've cloned the same constants many times,
-  // so we use CSE to deduplicate them.
-  EliminateCommonSubexpression(reverse_block);
 }
 
 // Takes a grad_desc.f returned from `addReverseInline` and splits off the
@@ -723,6 +777,9 @@ Gradient differentiate(std::shared_ptr<Graph>& graph) {
   // Fills in f, df, f_real_outputs, df_input_captures,
   // modifies df_input_vjps (new vjps are added for temporaries)
   lambdaLiftReverse(grad_desc, rev_info);
+  // It's possible the we've cloned the same constants many times,
+  // so we use CSE to deduplicate them.
+  EliminateCommonSubexpression(grad_desc.df);
   return grad_desc;
 }
 
