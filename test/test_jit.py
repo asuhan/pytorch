@@ -8880,6 +8880,61 @@ class TestAutodiffSubgraphSlicing(JitTestCase):
 
 class TestTraceAutodiff(JitTestCase):
 
+    @staticmethod
+    def _maybe_list(t):
+        if isinstance(t, torch.Tensor):
+            t = [t]
+        return t
+
+    @staticmethod
+    def _random_like_list(tensor_list):
+        random_tensors = []
+        for o in tensor_list:
+            random_tensors += [torch.randn(*o.shape, dtype=o.dtype)]
+        return random_tensors
+
+    def checkOutputsAndGradient(self, traced_model, inputs):
+        fwd = traced_model._get_method('forward')
+        inputs_params = inputs + list(traced_model.parameters())
+        inputs_params_buffers = inputs + list(fwd.params())
+
+        # Differentiate the model trace.
+        gradient = torch._C._jit_differentiate(fwd.graph)
+
+        # Run forward and backward graphs via GraphExecutor.
+        exec_f = torch._C.GraphExecutor(gradient.f, False)
+        exec_df = torch._C.GraphExecutor(gradient.df, False)
+
+        # Compute the results of the forward method.
+        raw_outputs = exec_f(*inputs_params_buffers)
+        raw_outputs = TestTraceAutodiff._maybe_list(raw_outputs)
+        outputs = raw_outputs[:gradient.f_real_outputs]
+
+        grad_outputs = TestTraceAutodiff._random_like_list(outputs)
+
+        raw_grad_outputs = []
+        raw_grad_outputs += grad_outputs
+        raw_grad_outputs += [inputs_params_buffers[i]
+                             for i in gradient.df_input_captured_inputs]
+        raw_grad_outputs += [raw_outputs[i]
+                             for i in gradient.df_input_captured_outputs]
+
+        grad_inputs = exec_df(*raw_grad_outputs)
+        grad_inputs = TestTraceAutodiff._maybe_list(grad_inputs)
+
+        # Compare the results of JIT autodiff and regular execution.
+        outputs_gt = traced_model(*inputs)
+        outputs_gt = TestTraceAutodiff._maybe_list(outputs_gt)
+        grad_inputs_gt = torch.autograd.grad(outputs_gt,
+                                             inputs_params,
+                                             grad_outputs,
+                                             only_inputs=True)
+        for out_jit, out_autograd in zip(outputs, outputs_gt):
+            self.assertEqual(out_jit, out_autograd)
+
+        for grad_input_jit, grad_input_autograd in zip(grad_inputs, grad_inputs_gt):
+            self.assertEqual(grad_input_jit, grad_input_autograd)
+
     def test_logsoftmax(self):
         dim = 0
         batch = 1
@@ -8893,6 +8948,7 @@ class TestTraceAutodiff(JitTestCase):
         traced = torch.jit.trace(model, input)
         traced_diff = torch._C._jit_differentiate(traced.graph)
         self.assertExpectedGraph(traced_diff.df)
+        self.checkOutputsAndGradient(traced, [input])
 
     def test_avgpool(self):
 
@@ -8915,6 +8971,7 @@ class TestTraceAutodiff(JitTestCase):
         torch._C._jit_pass_constant_propagation(traced.graph)
         traced_diff = torch._C._jit_differentiate(traced.graph)
         self.assertExpectedGraph(traced_diff.df)
+        self.checkOutputsAndGradient(traced, [input])
 
     def test_maxpool(self):
 
@@ -8928,6 +8985,7 @@ class TestTraceAutodiff(JitTestCase):
         torch._C._jit_pass_constant_propagation(traced.graph)
         traced_diff = torch._C._jit_differentiate(traced.graph)
         self.assertExpectedGraph(traced_diff.df)
+        self.checkOutputsAndGradient(traced, [input])
 
     def test_threshold(self):
 
@@ -8944,6 +9002,7 @@ class TestTraceAutodiff(JitTestCase):
         traced = torch.jit.trace(model, input)
         traced_diff = torch._C._jit_differentiate(traced.graph)
         self.assertExpectedGraph(traced_diff.df)
+        self.checkOutputsAndGradient(traced, [input])
 
     def test_expand(self):
 
@@ -8957,6 +9016,7 @@ class TestTraceAutodiff(JitTestCase):
         torch._C._jit_pass_constant_propagation(traced.graph)
         traced_diff = torch._C._jit_differentiate(traced.graph)
         self.assertExpectedGraph(traced_diff.df)
+        self.checkOutputsAndGradient(traced, [input])
 
     def test_view(self):
 
@@ -8970,6 +9030,7 @@ class TestTraceAutodiff(JitTestCase):
         torch._C._jit_pass_constant_propagation(traced.graph)
         traced_diff = torch._C._jit_differentiate(traced.graph)
         self.assertExpectedGraph(traced_diff.df)
+        self.checkOutputsAndGradient(traced, [input])
 
 
 class TestJitGenerated(JitTestCase):
