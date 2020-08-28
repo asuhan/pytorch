@@ -1,7 +1,10 @@
+#include <test/cpp/tensorexpr/padded_buffer.h>
 #include <test/cpp/tensorexpr/test_base.h>
 #include <torch/csrc/jit/frontend/code_template.h>
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/irparser.h>
+#include <torch/csrc/jit/tensorexpr/cuda_codegen.h>
+#include <torch/csrc/jit/tensorexpr/ir_simplifier.h>
 #include <torch/csrc/jit/tensorexpr/kernel.h>
 #include <torch/csrc/jit/tensorexpr/loopnest.h>
 #include <torch/csrc/jit/tensorexpr/tensor.h>
@@ -851,6 +854,52 @@ void testKernelSoftmax4D() {
     ASSERT_EQ(output.sizes(), ref.sizes());
     ASSERT_TRUE(at::allclose(output, ref));
   }
+}
+
+void testAPI() {
+  KernelScope kernel_scope;
+  int size_val = 10;
+  ExprHandle size(size_val);
+  Placeholder a_buf(BufHandle("a", {size}, kFloat));
+  Placeholder b_buf(BufHandle("b", {size}, kFloat));
+  Placeholder c_buf(BufHandle("c", {size}, kFloat));
+  Tensor* out1 =
+      Compute("out1", {DimArg(size, "i")}, [&](const VarHandle& index) {
+        return a_buf.load(index) + b_buf.load(index);
+      });
+  Tensor* out2 =
+      Compute("out2", {DimArg(size, "i")}, [&](const VarHandle& index) {
+        return c_buf.load(index) * out1->call(index);
+      });
+  LoopNest l({out2});
+  Stmt* tmp = l.getLoopBodyFor(out1);
+  l.computeInline(tmp);
+  l.prepareForCodegen();
+  Stmt* stmt = l.root_stmt();
+  stmt = IRSimplifier::simplify(stmt);
+  std::cerr << *stmt << "\n";
+  Placeholder out_buf(BufHandle(out2->buf()));
+  CudaCodeGen ir_eval(stmt, a_buf, b_buf, c_buf, out_buf);
+  at::Tensor a_v = torch::randn(
+      {static_cast<int64_t>(size_val)},
+      at::TensorOptions(at::kFloat).device(at::kCUDA));
+  at::Tensor b_v = torch::randn(
+      {static_cast<int64_t>(size_val)},
+      at::TensorOptions(at::kFloat).device(at::kCUDA));
+  at::Tensor c_v = torch::randn(
+      {static_cast<int64_t>(size_val)},
+      at::TensorOptions(at::kFloat).device(at::kCUDA));
+  at::Tensor out_v = torch::empty(
+      {static_cast<int64_t>(size_val)},
+      at::TensorOptions(at::kFloat).device(at::kCUDA));
+  std::vector<CodeGen::CallArg> args;
+  args.emplace_back(a_v.data_ptr());
+  args.emplace_back(b_v.data_ptr());
+  args.emplace_back(c_v.data_ptr());
+  args.emplace_back(out_v.data_ptr());
+  ir_eval.call(args);
+  auto ref_v = c_v * (a_v + b_v);
+  ASSERT_TRUE(ref_v.allclose(out_v));
 }
 
 } // namespace jit

@@ -364,6 +364,7 @@ namespace jit {
   _(KernelSoftmax2D)                                \
   _(KernelSoftmax3D)                                \
   _(KernelSoftmax4D)                                \
+  _(API)                                            \
   _(FuserPass_1)                                    \
   _(FuserPass_2)                                    \
   _(FuserPass_3)                                    \
