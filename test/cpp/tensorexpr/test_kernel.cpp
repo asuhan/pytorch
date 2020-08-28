@@ -1,7 +1,9 @@
+#include <test/cpp/tensorexpr/padded_buffer.h>
 #include <test/cpp/tensorexpr/test_base.h>
 #include <torch/csrc/jit/frontend/code_template.h>
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/irparser.h>
+#include <torch/csrc/jit/tensorexpr/ir_simplifier.h>
 #include <torch/csrc/jit/tensorexpr/kernel.h>
 #include <torch/csrc/jit/tensorexpr/loopnest.h>
 #include <torch/csrc/jit/tensorexpr/tensor.h>
@@ -850,6 +852,97 @@ void testKernelSoftmax4D() {
     auto ref = a.softmax(softmax_dim);
     ASSERT_EQ(output.sizes(), ref.sizes());
     ASSERT_TRUE(at::allclose(output, ref));
+  }
+}
+
+void testAPI() {
+  KernelScope kernel_scope;
+  std::vector<ExprHandle> sizes;
+  sizes.emplace_back(3);
+  sizes.emplace_back(5);
+  Placeholder a_buf(BufHandle("a", sizes, kFloat));
+  Placeholder b_buf(BufHandle("b", sizes, kFloat));
+  Placeholder c_buf(BufHandle("c", sizes, kFloat));
+  Tensor* a = Compute(
+      "in_a",
+      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
+      [&](const std::vector<VarHandle>& indices) {
+        return a_buf.load(indices[0], indices[1]);
+      });
+  Tensor* b = Compute(
+      "in_b",
+      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
+      [&](const std::vector<VarHandle>& indices) {
+        return b_buf.load(indices[0], indices[1]);
+      });
+  Tensor* c = Compute(
+      "in_c",
+      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
+      [&](const std::vector<VarHandle>& indices) {
+        return c_buf.load(indices[0], indices[1]);
+      });
+  Tensor* out1 = Compute(
+      "out1",
+      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
+      [&](const std::vector<VarHandle>& indices) {
+        return a->call(indices[0], indices[1]) +
+            b->call(indices[0], indices[1]);
+      });
+  Tensor* out2 = Compute(
+      "out2",
+      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
+      [&](const std::vector<VarHandle>& indices) {
+        return c->call(indices[0], indices[1]) *
+            out1->call(indices[0], indices[1]);
+      });
+  LoopNest l({out2});
+  Stmt* tmp = l.getLoopBodyFor(out1);
+  l.computeInline(tmp);
+  l.prepareForCodegen();
+  Stmt* stmt = l.root_stmt();
+  stmt = IRSimplifier::simplify(stmt);
+  std::cerr << *stmt << "\n";
+  Placeholder out_buf(BufHandle(out2->buf()));
+  SimpleIREvaluator ir_eval(stmt, a_buf, b_buf, c_buf, out_buf);
+  PaddedBuffer<float> a_v(3, 5);
+  {
+    float crt = 0;
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 5; ++j) {
+        a_v(i, j) = crt;
+        crt += 1;
+      }
+    }
+  }
+  PaddedBuffer<float> b_v(3, 5);
+  {
+    float crt = 0;
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 5; ++j) {
+        b_v(i, j) = crt;
+        crt += 10;
+      }
+    }
+  }
+  PaddedBuffer<float> c_v(3, 5);
+  {
+    float crt = 0;
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 5; ++j) {
+        c_v(i, j) = crt;
+        crt += 100;
+      }
+    }
+  }
+  PaddedBuffer<float> out_v(3, 5);
+  ir_eval(a_v, b_v, c_v, out_v);
+  {
+    for (size_t i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < 5; ++j) {
+        std::cerr << out_v(i, j) << "\t";
+      }
+      std::cerr << "\n";
+    }
   }
 }
 
