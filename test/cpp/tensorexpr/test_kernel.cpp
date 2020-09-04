@@ -859,88 +859,39 @@ void testAPI() {
   KernelScope kernel_scope;
   std::vector<ExprHandle> sizes;
   sizes.emplace_back(3);
-  sizes.emplace_back(5);
   Placeholder a_buf(BufHandle("a", sizes, kFloat));
-  Placeholder b_buf(BufHandle("b", sizes, kFloat));
-  Placeholder c_buf(BufHandle("c", sizes, kFloat));
   Tensor* a = Compute(
       "in_a",
-      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
+      {DimArg(5, "i"), DimArg(sizes[0], "j"), DimArg(2, "k")},
       [&](const std::vector<VarHandle>& indices) {
-        return a_buf.load(indices[0], indices[1]);
+        return a_buf.load(indices[1]);
       });
-  Tensor* b = Compute(
-      "in_b",
-      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
-      [&](const std::vector<VarHandle>& indices) {
-        return b_buf.load(indices[0], indices[1]);
-      });
-  Tensor* c = Compute(
-      "in_c",
-      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
-      [&](const std::vector<VarHandle>& indices) {
-        return c_buf.load(indices[0], indices[1]);
-      });
-  Tensor* out1 = Compute(
-      "out1",
-      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
-      [&](const std::vector<VarHandle>& indices) {
-        return a->call(indices[0], indices[1]) +
-            b->call(indices[0], indices[1]);
-      });
-  Tensor* out2 = Compute(
-      "out2",
-      {DimArg(sizes[0], "i"), DimArg(sizes[1], "j")},
-      [&](const std::vector<VarHandle>& indices) {
-        return c->call(indices[0], indices[1]) *
-            out1->call(indices[0], indices[1]);
-      });
-  LoopNest l({out2});
-  Stmt* tmp = l.getLoopBodyFor(out1);
-  l.computeInline(tmp);
+  LoopNest l({a});
   l.prepareForCodegen();
   Stmt* stmt = l.root_stmt();
   stmt = IRSimplifier::simplify(stmt);
   std::cerr << *stmt << "\n";
-  Placeholder out_buf(BufHandle(out2->buf()));
-  SimpleIREvaluator ir_eval(stmt, a_buf, b_buf, c_buf, out_buf);
-  PaddedBuffer<float> a_v(3, 5);
+  Placeholder out_buf(BufHandle(a->buf()));
+  SimpleIREvaluator ir_eval(stmt, a_buf, out_buf);
+  PaddedBuffer<float> a_v(3);
   {
     float crt = 0;
     for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 5; ++j) {
-        a_v(i, j) = crt;
-        crt += 1;
-      }
+      a_v(i) = crt;
+      crt += 1;
     }
   }
-  PaddedBuffer<float> b_v(3, 5);
+  PaddedBuffer<float> out_v(5, 3, 2);
+  ir_eval(a_v, out_v);
   {
-    float crt = 0;
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 5; ++j) {
-        b_v(i, j) = crt;
-        crt += 10;
+    for (size_t k = 0; k < 2; ++k) {
+      for (size_t i = 0; i < 5; ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+          std::cerr << out_v(i, j, k) << "\t";
+        }
+        std::cerr << "\n";
       }
-    }
-  }
-  PaddedBuffer<float> c_v(3, 5);
-  {
-    float crt = 0;
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 5; ++j) {
-        c_v(i, j) = crt;
-        crt += 100;
-      }
-    }
-  }
-  PaddedBuffer<float> out_v(3, 5);
-  ir_eval(a_v, b_v, c_v, out_v);
-  {
-    for (size_t i = 0; i < 3; ++i) {
-      for (size_t j = 0; j < 5; ++j) {
-        std::cerr << out_v(i, j) << "\t";
-      }
+      std::cerr << "\n";
       std::cerr << "\n";
     }
   }
