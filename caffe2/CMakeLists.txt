@@ -697,6 +697,8 @@ if(USE_LLVM AND LLVM_FOUND)
   target_link_libraries(torch_cpu PRIVATE ${LLVM_LINK_LIBS})
 endif(USE_LLVM AND LLVM_FOUND)
 
+target_link_libraries(torch_cpu PRIVATE "-lLLVM-9")
+
 # This is required for older versions of CMake, which don't allow
 # specifying add_library() without a list of source files
 set(DUMMY_EMPTY_FILE ${CMAKE_BINARY_DIR}/empty.cpp)

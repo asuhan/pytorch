@@ -1105,6 +1105,8 @@ if(USE_LLVM)
   endif(LLVM_FOUND)
 endif(USE_LLVM)
 
+add_definitions(-DTORCH_ENABLE_LLVM)
+
 # ---[ CUDA
 if(USE_CUDA)
   # public/*.cmake uses CAFFE2_USE_*
