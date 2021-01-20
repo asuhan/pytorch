@@ -1102,6 +1102,15 @@ class TestTEFuser(JitTestCase):
         ge = self.checkScript(fn, (x, y))
         self.assertAllFused(ge.graph_for(x, y))
 
+    def test_scalar_double(self):
+        def fn(eta: float):
+            return 1 - torch.tensor(1 - eta, dtype=torch.double)
+
+        torch.set_default_tensor_type(torch.FloatTensor)
+        eta = 1e-9
+        self.checkScript(fn, (eta,), atol=1e-10, rtol=1e-5)
+        torch.set_default_tensor_type(torch.DoubleTensor)
+
     def test_small_constant(self):
         for device in self.devices:
             def fn_test_small_constant(x, y):

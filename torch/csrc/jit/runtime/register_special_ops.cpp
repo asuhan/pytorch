@@ -291,11 +291,11 @@ RegisterOperators reg({
           aliasAnalysisFromSchema()),
 
     DEFINE_TORCH_TENSOR_OP(
-        float,
+        double,
         double,
         at::native::scalar_tensor(
             scalar_val,
-            at::device(at::kCPU).dtype(c10::get_default_dtype())))
+            at::device(at::kCPU).dtype(at::kDouble)))
         DEFINE_TORCH_TENSOR_OP(int, int64_t, at::scalar_to_tensor(scalar_val))
             DEFINE_TORCH_TENSOR_OP(
                 bool,
