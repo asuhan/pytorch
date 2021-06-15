@@ -1666,7 +1666,7 @@ TEST_F(AtenLtcTsTensorTest, TestGroupNorm) {
   }
 }
 
-TEST_F(AtenLtcTsTensorTest, TestGroupNormBackward) {
+TEST_F(AtenLtcTsTensorTest, DISABLED_TestGroupNormBackward) {
   int num_channels = 6;
   torch::Tensor input =
       torch::rand({2, num_channels, 5, 5},
@@ -1759,7 +1759,7 @@ TEST_F(AtenLtcTsTensorTest, TestLayerNorm) {
   }
 }
 
-TEST_F(AtenLtcTsTensorTest, TestLayerNormBackward) {
+TEST_F(AtenLtcTsTensorTest, DISABLED_TestLayerNormBackward) {
   torch::Tensor input = torch::rand(
       {2, 3, 3, 3}, torch::TensorOptions(torch::kFloat).requires_grad(true));
   double eps = 1e-05;
