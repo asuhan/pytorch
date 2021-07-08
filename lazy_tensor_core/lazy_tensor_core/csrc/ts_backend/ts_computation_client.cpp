@@ -42,12 +42,11 @@ std::vector<ComputationClient::ComputationPtr> TSComputationClient::Compile(
 std::vector<ComputationClient::DataPtr> TSComputationClient::ExecuteComputation(
     const Computation& computation, lazy_tensors::Span<const DataPtr> arguments,
     const std::string& device, const ExecuteComputationOptions& options) {
-  auto graph =
+  torch::jit::GraphExecutor* executor =
       static_cast<
           torch_lazy_tensors::compiler::ts_backend::GenericComputationTS*>(
           computation.computation())
-          ->graph();
-  torch::jit::GraphExecutor interp(graph, "");
+          ->executor();
   std::vector<torch::jit::IValue> stack;
   for (auto argument : arguments) {
     const auto ts_data =
@@ -58,7 +57,7 @@ std::vector<ComputationClient::DataPtr> TSComputationClient::ExecuteComputation(
         ts_data->data_.device().type() == at::kCUDA);
     stack.emplace_back(ts_data->data_);
   }
-  interp.run(stack);
+  executor->run(stack);
   std::vector<ComputationClient::DataPtr> results;
   for (torch::jit::IValue component : stack) {
     at::Tensor result = component.toTensor();
